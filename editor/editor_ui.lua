@@ -49,6 +49,12 @@ function EditorUI.init(editorState, modeEnum, toolEnum)
     MODE = modeEnum
     TOOL = toolEnum
     EditorRef = require("editor.editor")
+    -- Panel scroll
+    EditorUI.scrollY = 0
+    EditorUI.maxScrollY = 0
+    EditorUI.panelDragging = false
+    EditorUI.panelDragStartY = 0
+    EditorUI.panelDragStartScroll = 0
 
     -- Create fonts (use default LÖVE font at different sizes)
     fontTitle = love.graphics.newFont(16)
@@ -58,6 +64,15 @@ end
 
 function EditorUI.update(dt)
     -- Nothing time-dependent yet
+end
+
+function EditorUI.wheelmoved(y)
+    if EditorUI.maxScrollY > 0 then
+        EditorUI.scrollY = EditorUI.scrollY - y * 20
+        EditorUI.scrollY = math.max(0, math.min(EditorUI.maxScrollY, EditorUI.scrollY))
+        return true
+    end
+    return false
 end
 
 ------------------------------------------------------------
@@ -87,6 +102,13 @@ function EditorUI.draw()
     love.graphics.line(PANEL_X + PADDING, y, PANEL_X + PANEL_W - PADDING, y)
     y = y + 10
 
+    -- Apply panel scroll offset
+    local scrollStartY = y
+    y = y - EditorUI.scrollY
+
+    -- Clip panel content
+    love.graphics.setScissor(PANEL_X, scrollStartY, PANEL_W, PANEL_H - scrollStartY - 35)
+
     -- Mode-specific content
     if state.mode == MODE.DRAW then
         y = drawDrawTools(y)
@@ -103,7 +125,21 @@ function EditorUI.draw()
     -- File operations
     y = drawFileSection(y)
 
+    -- Physics panel
+    y = y + 10
+    love.graphics.setColor(C.SEPARATOR)
+    love.graphics.line(PANEL_X + PADDING, y, PANEL_X + PANEL_W - PADDING, y)
+    y = y + 10
+    y = drawPhysicsPanel(y)
+
+    -- End scrollable content - compute overflow
+    love.graphics.setScissor()
+    local contentBottom = y + EditorUI.scrollY
+    local visibleHeight = PANEL_H - 120 - 35
+    EditorUI.maxScrollY = math.max(0, contentBottom - 120 - visibleHeight)
+
     -- Status bar at bottom
+    drawScrollbar()
     drawStatusBar()
 end
 
@@ -430,6 +466,22 @@ function drawEntityTools(y)
         drawButton(x + (spdW + BTN_GAP) * 2, y, spdW, BTN_H, "Fast", math.abs(curSpd - 1.0) < 0.1, "move_fast")
         y = y + BTN_H + BTN_GAP
 
+        -- Start direction toggle
+        love.graphics.setColor(C.TEXT_DIM)
+        love.graphics.print("Start Dir:", x, y)
+        y = y + 18
+        local startDir = (selBat.moveStartDir or 1)
+        local dirLabel1, dirLabel2
+        if curDir == "VERTICAL" then
+            dirLabel1, dirLabel2 = "Up First", "Down First"
+        else
+            dirLabel1, dirLabel2 = "Left First", "Right First"
+        end
+        local sdW = (fullW - BTN_GAP) / 2
+        drawButton(x, y, sdW, BTN_H, dirLabel1, startDir == 1, "move_startdir_pos")
+        drawButton(x + sdW + BTN_GAP, y, sdW, BTN_H, dirLabel2, startDir == -1, "move_startdir_neg")
+        y = y + BTN_H + BTN_GAP
+
         -- Distance display + buttons
         love.graphics.setColor(C.TEXT_DIM)
         love.graphics.print("Distance: " .. tostring(selBat.moveDist or 24) .. "px", x, y)
@@ -503,12 +555,95 @@ function drawFileSection(y)
     return y
 end
 
+function drawPhysicsPanel(y)
+    local x = PANEL_X + PADDING
+    local fullW = PANEL_W - PADDING * 2
+
+    love.graphics.setFont(fontTitle)
+    love.graphics.setColor(C.TEXT)
+    love.graphics.print("Physics", x, y)
+    y = y + 22
+
+    love.graphics.setFont(fontSmall)
+    local params = {
+        {key = "gravity", label = "Gravity", min = 0.01, max = 0.15, step = 0.01},
+        {key = "jumpPower", label = "Jump Power", min = 0.5, max = 3.0, step = 0.1},
+        {key = "bouncePower", label = "Bounce", min = 0.5, max = 3.0, step = 0.1},
+        {key = "maxFallSpeed", label = "Max Fall", min = 1.0, max = 5.0, step = 0.1},
+        {key = "moveAccel", label = "Move Accel", min = 0.02, max = 0.3, step = 0.02},
+        {key = "maxSpeedX", label = "Max Speed X", min = 0.3, max = 2.5, step = 0.1},
+        {key = "friction", label = "Friction", min = 0.5, max = 0.98, step = 0.01},
+        {key = "playerW", label = "Player W", min = 4, max = 24, step = 2},
+        {key = "playerH", label = "Player H", min = 4, max = 24, step = 2},
+        {key = "mothW", label = "Moth W", min = 4, max = 24, step = 2},
+        {key = "mothH", label = "Moth H", min = 4, max = 24, step = 2},
+    }
+
+    for _, p in ipairs(params) do
+        local val = state.physics[p.key]
+        love.graphics.setColor(C.TEXT_DIM)
+        love.graphics.print(p.label .. ":", x, y)
+        love.graphics.setColor(C.TEXT)
+        love.graphics.print(string.format("%.2f", val), x + 90, y)
+        y = y + 14
+
+        -- Slider track
+        local sliderY = y + 2
+        local frac = (val - p.min) / (p.max - p.min)
+        frac = math.max(0, math.min(1, frac))
+
+        love.graphics.setColor(C.BTN)
+        love.graphics.rectangle("fill", x, sliderY, fullW, 6, 3)
+        love.graphics.setColor(C.ACCENT)
+        love.graphics.rectangle("fill", x, sliderY, fullW * frac, 6, 3)
+
+        -- Slider thumb
+        local thumbX = x + fullW * frac
+        love.graphics.setColor(C.TEXT)
+        love.graphics.circle("fill", thumbX, sliderY + 3, 5)
+
+        -- Store slider bounds for click handling
+        local btn = {x = x, y = sliderY - 4, w = fullW, h = 14, id = "phys_" .. p.key}
+        table.insert(buttons, btn)
+
+        y = y + 18
+    end
+
+    
+    -- Export/Import Physics buttons
+    y = y + 10
+    local phBtnW = (fullW - BTN_GAP) / 2
+    drawButton(x, y, phBtnW, BTN_H, "Export", false, "phys_export")
+    drawButton(x + phBtnW + BTN_GAP, y, phBtnW, BTN_H, "Import", false, "phys_import")
+    y = y + BTN_H + BTN_GAP
+
+return y
+end
+
 -- Cached fill percentage (recomputed only when dirty)
 local cachedFillPct = 0
 local fillDirtyFlag = true
 
 function EditorUI.markFillDirty()
     fillDirtyFlag = true
+end
+
+function drawScrollbar()
+    -- Draw scrollbar on right edge of panel if content overflows
+    if EditorUI.maxScrollY <= 0 then return end
+    local trackX = PANEL_X + PANEL_W - 8
+    local trackY = 120  -- below toolbar
+    local trackH = PANEL_H - 120 - 40
+    local thumbRatio = trackH / (trackH + EditorUI.maxScrollY)
+    local thumbH = math.max(20, trackH * thumbRatio)
+    local thumbY = trackY + (EditorUI.scrollY / EditorUI.maxScrollY) * (trackH - thumbH)
+
+    -- Track
+    love.graphics.setColor(0.2, 0.2, 0.2, 0.5)
+    love.graphics.rectangle("fill", trackX, trackY, 6, trackH, 3)
+    -- Thumb
+    love.graphics.setColor(0.5, 0.5, 0.5, 0.7)
+    love.graphics.rectangle("fill", trackX, thumbY, 6, thumbH, 3)
 end
 
 function drawStatusBar()
@@ -552,6 +687,14 @@ end
 function EditorUI.mousepressed(x, y, button)
     if button ~= 1 then return false end
 
+    -- Scrollbar drag (right 12px of panel)
+    if x >= PANEL_X + PANEL_W - 12 and EditorUI.maxScrollY > 0 then
+        EditorUI.panelDragging = true
+        EditorUI.panelDragStartY = y
+        EditorUI.panelDragStartScroll = EditorUI.scrollY
+        return true
+    end
+
     for _, btn in ipairs(buttons) do
         if x >= btn.x and x <= btn.x + btn.w
            and y >= btn.y and y <= btn.y + btn.h then
@@ -562,6 +705,14 @@ function EditorUI.mousepressed(x, y, button)
 end
 
 function EditorUI.mousemoved(x, y)
+    -- Panel scroll dragging
+    if EditorUI.panelDragging then
+        local dy = y - EditorUI.panelDragStartY
+        EditorUI.scrollY = EditorUI.panelDragStartScroll + dy
+        EditorUI.scrollY = math.max(0, math.min(EditorUI.maxScrollY, EditorUI.scrollY))
+        return
+    end
+
     hoveredBtn = nil
     for _, btn in ipairs(buttons) do
         if x >= btn.x and x <= btn.x + btn.w
@@ -572,7 +723,29 @@ function EditorUI.mousemoved(x, y)
     end
 
     -- Handle slider dragging
-    if sliderDragging == "brush_slider" then
+    if sliderDragging and sliderDragging:sub(1, 5) == "phys_" then
+        local key = sliderDragging:sub(6)
+        local params = {
+            gravity = {min = 0.01, max = 0.15},
+            jumpPower = {min = 0.5, max = 3.0},
+            bouncePower = {min = 0.5, max = 3.0},
+            maxFallSpeed = {min = 1.0, max = 5.0},
+            moveAccel = {min = 0.02, max = 0.3},
+            maxSpeedX = {min = 0.3, max = 2.5},
+            friction = {min = 0.5, max = 0.98},
+            playerW = {min = 4, max = 24},
+            playerH = {min = 4, max = 24},
+            mothW = {min = 4, max = 24},
+            mothH = {min = 4, max = 24},
+        }
+        local p = params[key]
+        if p then
+            local sliderX = PANEL_X + PADDING
+            local sliderW = PANEL_W - PADDING * 2
+            local frac = math.max(0, math.min(1, (x - sliderX) / sliderW))
+            state.physics[key] = p.min + frac * (p.max - p.min)
+        end
+    elseif sliderDragging == "brush_slider" then
         local sliderX = PANEL_X + PADDING
         local sliderW = PANEL_W - PADDING * 2
         local frac = math.max(0, math.min(1, (x - sliderX) / sliderW))
@@ -582,6 +755,7 @@ end
 
 function EditorUI.mousereleased(x, y, button)
     sliderDragging = nil
+    EditorUI.panelDragging = false
 end
 
 function EditorUI.handleButtonClick(id, clickX)
@@ -611,6 +785,8 @@ function EditorUI.handleButtonClick(id, clickX)
     if id == "move_slow" then local m = getSelectedMoth(); if m then m.moveSpeed = 0.3 end; return true end
     if id == "move_med" then local m = getSelectedMoth(); if m then m.moveSpeed = 0.6 end; return true end
     if id == "move_fast" then local m = getSelectedMoth(); if m then m.moveSpeed = 1.0 end; return true end
+    if id == "move_startdir_pos" then local m = getSelectedMoth(); if m then m.moveStartDir = 1 end; return true end
+    if id == "move_startdir_neg" then local m = getSelectedMoth(); if m then m.moveStartDir = -1 end; return true end
     if id == "move_dist_12" then local m = getSelectedMoth(); if m then m.moveDist = 12 end; return true end
     if id == "move_dist_24" then local m = getSelectedMoth(); if m then m.moveDist = 24 end; return true end
     if id == "move_dist_36" then local m = getSelectedMoth(); if m then m.moveDist = 36 end; return true end
@@ -660,6 +836,43 @@ function EditorUI.handleButtonClick(id, clickX)
     if id == "tool_eraser" then state.tool = TOOL.ERASER; return true end
     if id == "tool_fill" then state.tool = TOOL.FILL; return true end
     if id == "tool_line" then state.tool = TOOL.LINE; return true end
+
+    -- Physics export/import
+    if id == "phys_export" then
+        EditorRef.exportPhysics()
+        return true
+    end
+    if id == "phys_import" then
+        EditorRef.importPhysics()
+        return true
+    end
+
+    -- Physics sliders
+    if id and id:sub(1, 5) == "phys_" then
+        local key = id:sub(6)
+        local params = {
+            gravity = {min = 0.01, max = 0.15},
+            jumpPower = {min = 0.5, max = 3.0},
+            bouncePower = {min = 0.5, max = 3.0},
+            maxFallSpeed = {min = 1.0, max = 5.0},
+            moveAccel = {min = 0.02, max = 0.3},
+            maxSpeedX = {min = 0.3, max = 2.5},
+            friction = {min = 0.5, max = 0.98},
+            playerW = {min = 4, max = 24},
+            playerH = {min = 4, max = 24},
+            mothW = {min = 4, max = 24},
+            mothH = {min = 4, max = 24},
+        }
+        local p = params[key]
+        if p then
+            sliderDragging = id
+            local sliderX = PANEL_X + PADDING
+            local sliderW = PANEL_W - PADDING * 2
+            local frac = math.max(0, math.min(1, (clickX - sliderX) / sliderW))
+            state.physics[key] = p.min + frac * (p.max - p.min)
+        end
+        return true
+    end
 
     -- Brush slider
     if id == "brush_slider" then

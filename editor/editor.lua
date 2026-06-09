@@ -80,6 +80,21 @@ local state = {
     currentMapName = "untitled",
     dirty = false,  -- has unsaved changes
 
+    -- Physics params (global, shared across all levels)
+    physics = {
+        gravity = 0.05,
+        jumpPower = 1.30,
+        bouncePower = 1.30,
+        maxFallSpeed = 2.2,
+        moveAccel = 0.12,
+        maxSpeedX = 1.2,
+        friction = 0.86,
+        playerW = 6,
+        playerH = 6,
+        mothW = 5.24,
+        mothH = 5.24,
+    },
+
     -- UI state
     showGrid = true,
     showGeneratePanel = false,
@@ -682,6 +697,39 @@ function Editor.openFilePicker()
     end
 end
 
+-- Export physics params to JSON file
+function Editor.exportPhysics()
+    local sourcePath = love.filesystem.getSource()
+    local filePath = sourcePath .. "/physics.json"
+    local jsonStr = json.encodePretty(state.physics)
+    local f = io.open(filePath, "w")
+    if f then
+        f:write(jsonStr)
+        f:close()
+        print("Physics exported to: " .. filePath)
+    end
+end
+
+-- Import physics params from JSON file
+function Editor.importPhysics()
+    local sourcePath = love.filesystem.getSource()
+    local filePath = sourcePath .. "/physics.json"
+    local f = io.open(filePath, "r")
+    if f then
+        local content = f:read("*a")
+        f:close()
+        local data = json.decode(content)
+        if data then
+            for k, v in pairs(data) do
+                if state.physics[k] ~= nil then
+                    state.physics[k] = v
+                end
+            end
+            print("Physics imported from: " .. filePath)
+        end
+    end
+end
+
 function Editor.exportToGame()
     local refs = state.gameRefs
     if not refs then return end
@@ -837,13 +885,13 @@ function Editor.startPlayTest()
         airWalls = {},
     }
     for _, bat in ipairs(state.bats) do
-        table.insert(refs.levels[0].bats, {x = bat.x, y = bat.y, moveDir = bat.moveDir, moveDist = bat.moveDist, moveSpeed = bat.moveSpeed})
+        table.insert(refs.levels[0].bats, {x = bat.x, y = bat.y, moveDir = bat.moveDir, moveDist = bat.moveDist, moveSpeed = bat.moveSpeed, moveStartDir = bat.moveStartDir or 1})
     end
     for _, aw in ipairs(state.airWalls) do
         table.insert(refs.levels[0].airWalls, {x = aw.x, y = aw.y})
     end
     for _, vb in ipairs(state.voidBats) do
-        table.insert(refs.levels[0].voidBats, {x = vb.x, y = vb.y, moveDir = vb.moveDir, moveDist = vb.moveDist, moveSpeed = vb.moveSpeed})
+        table.insert(refs.levels[0].voidBats, {x = vb.x, y = vb.y, moveDir = vb.moveDir, moveDist = vb.moveDist, moveSpeed = vb.moveSpeed, moveStartDir = vb.moveStartDir or 1})
     end
     for _, ml in ipairs(state.mirrorLines) do
         table.insert(refs.levels[0].mirrorLines, {x = ml.x, y = ml.y, length = ml.length})
@@ -862,6 +910,19 @@ function Editor.startPlayTest()
     -- Switch to game mode
     state.isPlayTesting = true
     love.window.setMode(480, 854, {resizable = true})
+
+    -- Apply editor physics params to game
+    refs.PHYSICS.GRAVITY = -state.physics.gravity
+    refs.PHYSICS.JUMP_POWER = state.physics.jumpPower
+    refs.PHYSICS.BOUNCE_POWER = state.physics.bouncePower
+    refs.PHYSICS.MAX_FALL_SPEED = state.physics.maxFallSpeed
+    refs.PHYSICS.MOVE_ACCEL = state.physics.moveAccel
+    refs.PHYSICS.MAX_SPEED_X = state.physics.maxSpeedX
+    refs.PHYSICS.FRICTION = state.physics.friction
+    refs.PHYSICS.PLAYER_W = state.physics.playerW
+    refs.PHYSICS.PLAYER_H = state.physics.playerH
+    refs.PHYSICS.MOTH_W = state.physics.mothW
+    refs.PHYSICS.MOTH_H = state.physics.mothH
 
     -- Load the level using game logic
     refs.gameWorld.state = refs.STATE.READY
@@ -1146,7 +1207,7 @@ function Editor.mousepressed(x, y, button)
                     table.insert(state.airWalls, {x = math.floor(wx / 6 + 0.5) * 6, y = math.floor(wy / 6 + 0.5) * 6})
                     state.dirty = true
                 elseif state.entitySubMode == "BAT" then
-                    table.insert(state.bats, {x = math.floor(wx / 6 + 0.5) * 6, y = math.floor(wy / 6 + 0.5) * 6, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6})
+                    table.insert(state.bats, {x = math.floor(wx / 6 + 0.5) * 6, y = math.floor(wy / 6 + 0.5) * 6, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6, moveStartDir = 1})
                     state.dirty = true
                 elseif state.entitySubMode == "VOID_BAT" then
                     table.insert(state.voidBats, {x = wx, y = wy})
@@ -1298,6 +1359,13 @@ end
 
 function Editor.wheelmoved(x, y)
     if state.isPlayTesting then return false end
+
+    -- If mouse is over panel, scroll the panel
+    local mouseX = love.mouse.getX()
+    if mouseX >= PANEL_X and EditorUI then
+        EditorUI.wheelmoved(y)
+        return true
+    end
 
     local ctrl = love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
         or love.keyboard.isDown("lgui") or love.keyboard.isDown("rgui")
@@ -1501,7 +1569,7 @@ function Editor.drawEntities()
 
     -- Player collision body hitbox (9x8 pixels)
     if state.showHitboxes then
-        local pw, ph = 12, 12
+        local pw, ph = state.physics.playerW, state.physics.playerH
         local hbx = ox + (state.playerStart.x - pw/2) * scale
         local hby = oy + (state.playerStart.y - ph/2) * scale
         love.graphics.setColor(0, 1, 0, 0.25)
@@ -1539,7 +1607,7 @@ function Editor.drawEntities()
 
         -- Collision body hitbox (11w + 2 tolerance, 7h + 2 tolerance = 13x9)
         if state.showHitboxes then
-            local bw, bh = 12, 12
+            local bw, bh = state.physics.mothW, state.physics.mothH
             local hbx = ox + (bat.x - bw/2) * scale
             local hby = oy + (bat.y - bh/2) * scale
             if isSel then

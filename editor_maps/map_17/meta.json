@@ -1,0 +1,60 @@
+{
+  "airWalls": [
+    {
+      "x": 66,
+      "y": 66
+    },
+    {
+      "x": 42,
+      "y": 66
+    }
+  ],
+  "bats": [
+    {
+      "moveDir": "VERTICAL",
+      "moveDist": 48,
+      "moveSpeed": 0.3,
+      "moveStartDir": 1,
+      "x": 72,
+      "y": 90
+    },
+    {
+      "moveDir": "VERTICAL",
+      "moveDist": 48,
+      "moveSpeed": 0.3,
+      "moveStartDir": 1,
+      "x": 84,
+      "y": 90
+    },
+    {
+      "moveDir": "VERTICAL",
+      "moveDist": 48,
+      "moveSpeed": 0.3,
+      "moveStartDir": 1,
+      "x": 36,
+      "y": 90
+    },
+    {
+      "moveDir": "VERTICAL",
+      "moveDist": 48,
+      "moveSpeed": 0.3,
+      "moveStartDir": 1,
+      "x": 24,
+      "y": 90
+    }
+  ],
+  "mirrorLines": [],
+  "name": "map_1780994832",
+  "platformXMax": 66,
+  "platformXMin": 42,
+  "playerStart": {
+    "x": 54,
+    "y": 66
+  },
+  "voidBats": [
+    {
+      "x": 54,
+      "y": 108
+    }
+  ]
+}

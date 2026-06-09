@@ -1,0 +1,39 @@
+{
+  "airWalls": [
+    {
+      "x": 54,
+      "y": 66
+    },
+    {
+      "x": 30,
+      "y": 66
+    }
+  ],
+  "bats": [
+    {
+      "moveDir": "HORIZONTAL",
+      "moveDist": 36,
+      "moveSpeed": 0.3,
+      "moveStartDir": -1,
+      "x": 54,
+      "y": 102
+    },
+    {
+      "moveDir": "VERTICAL",
+      "moveDist": 36,
+      "moveSpeed": 0.6,
+      "moveStartDir": 1,
+      "x": 78,
+      "y": 126
+    }
+  ],
+  "mirrorLines": [],
+  "name": "map_1780994832",
+  "platformXMax": 66,
+  "platformXMin": 42,
+  "playerStart": {
+    "x": 42,
+    "y": 66
+  },
+  "voidBats": []
+}

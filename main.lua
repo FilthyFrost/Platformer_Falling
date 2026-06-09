@@ -12,12 +12,16 @@ local WORLD_H = 192
 
 local PHYSICS = {
     GRAVITY      = -0.05,
-    JUMP_POWER   =  1.5,
-    BOUNCE_POWER =  1.5,
+    JUMP_POWER   =  1.30,
+    BOUNCE_POWER =  1.30,
     MAX_FALL_SPEED = 2.2,
     MOVE_ACCEL   = 0.12,
     MAX_SPEED_X  = 1.2,
-    FRICTION     = 0.87,
+    FRICTION     = 0.86,
+    PLAYER_W     = 6,
+    PLAYER_H     = 6,
+    MOTH_W       = 5.24,
+    MOTH_H       = 5.24,
 }
 
 -- Carmine Requiem palette
@@ -573,7 +577,7 @@ end
 local function createPlayer(sx, sy)
     return {
         x = sx, y = screenToLogicY(sy),
-        w = 12, h = 12,
+        w = PHYSICS.PLAYER_W, h = PHYSICS.PLAYER_H,
         vx = 0, vy = 0,
         squash = 1.0, stretch = 1.0,
         grounded = true,
@@ -585,7 +589,7 @@ end
 local function createMoth(sx, sy)
     return {
         x = sx, y = screenToLogicY(sy),
-        w = 12, h = 12,
+        w = PHYSICS.PLAYER_W, h = PHYSICS.PLAYER_H,
         active = true,
         hoverOffset = math.random() * math.pi * 2,
     }
@@ -868,8 +872,8 @@ function GameLogic.checkCollisions(world)
     for _, t in ipairs(world.targets) do
         if not t.active then goto continue end
         allBaseCleared = false
-        if math.abs(p.x - t.x) < 12 and
-           math.abs(p.y - t.y) < 12 then
+        if math.abs(p.x - t.x) < (PHYSICS.PLAYER_W/2 + PHYSICS.MOTH_W/2) and
+           math.abs(p.y - t.y) < (PHYSICS.PLAYER_H/2 + PHYSICS.MOTH_H/2) then
             local isFalling = (p.vy * p.gravityDir < 0)
             if isFalling then
                 p.vy = PHYSICS.BOUNCE_POWER * p.gravityDir
@@ -1093,12 +1097,14 @@ function GameLogic.update(world, dt)
         actions.jump = false
     end
 
+    -- Moths always move (so player can observe patterns before jumping)
+    MothMovement.update(world.targets)
+    MothMovement.update(world.voidBats)
+
     if world.state == STATE.READY then
         GameLogic.updatePlayerGrounded(world)
     elseif world.state == STATE.PLAYING then
         GameLogic.updatePlayer(world)
-        MothMovement.update(world.targets)
-        MothMovement.update(world.voidBats)
         GameLogic.checkCollisions(world)
     end
 end
@@ -1766,6 +1772,7 @@ function love.load()
         GameLogic = GameLogic,
         STATE = STATE,
         gameWorld = gameWorld,
+        PHYSICS = PHYSICS,
     })
 end
 

@@ -71,7 +71,8 @@ function MothMovement.applyConfig(targets, batConfigs)
         if config and config.moveDir and config.moveDir ~= "NONE" then
             t.moveDir = config.moveDir
             t.moveDist = config.moveDist or 24
-            t.moveSpeed = math.abs(config.moveSpeed or 0.6)
+            local startDir = config.moveStartDir or 1  -- 1=up/left first, -1=down/right first
+            t.moveSpeed = math.abs(config.moveSpeed or 0.6) * startDir
             t.movePhase = 0.5  -- start at center
             t.baseX = t.x
             t.baseY = t.y
