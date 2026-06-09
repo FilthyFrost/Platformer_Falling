@@ -30,22 +30,23 @@ levels[1] = {
 levels[2] = {
     stencilFile = "maps/level_2_stencil.png",
     textureFile = "maps/level_2_texture.png",
-    playerStart = {x = 30, y = 18},
-    platformXMin = 0,
+    playerStart = {x = 30, y = 42},
+    platformXMin = 12,
     platformXMax = 36,
     bats = {
-        {x = 54, y = 54, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
-        {x = 30, y = 66, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
-        {x = 18, y = 78, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 54, y = 78, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 78, y = 150, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 48, y = 114, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
     },
     voidBats = {
     },
     mirrorLines = {
     },
     airWalls = {
-        {x = 42, y = 18},
+        {x = 42, y = 42},
+        {x = 6, y = 42},
     },
-    spawnPlatform = {x = 0, y = 22, width = 36},
+    spawnPlatform = {x = 12, y = 46, width = 24},
 }
 
 levels[3] = {

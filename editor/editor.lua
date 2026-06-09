@@ -1501,7 +1501,7 @@ function Editor.drawEntities()
 
     -- Player collision body hitbox (9x8 pixels)
     if state.showHitboxes then
-        local pw, ph = 6, 6
+        local pw, ph = 12, 12
         local hbx = ox + (state.playerStart.x - pw/2) * scale
         local hby = oy + (state.playerStart.y - ph/2) * scale
         love.graphics.setColor(0, 1, 0, 0.25)
@@ -1539,7 +1539,7 @@ function Editor.drawEntities()
 
         -- Collision body hitbox (11w + 2 tolerance, 7h + 2 tolerance = 13x9)
         if state.showHitboxes then
-            local bw, bh = 6, 6
+            local bw, bh = 12, 12
             local hbx = ox + (bat.x - bw/2) * scale
             local hby = oy + (bat.y - bh/2) * scale
             if isSel then

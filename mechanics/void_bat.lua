@@ -47,7 +47,7 @@ function VoidBat.load(world, levelData)
         table.insert(world.voidBats, {
             x = vb.x,
             y = screenToLogicY(vb.y),
-            w = 6, h = 6,
+            w = 12, h = 12,
             void = true,      -- true = ethereal (no collision), false = materialized
             active = true,    -- false = killed
             hoverOffset = math.random() * math.pi * 2,
@@ -110,8 +110,8 @@ function VoidBat.checkCollision(world, PHYSICS, PAL, createSplatter, createFeath
     for _, vb in ipairs(world.voidBats) do
         if not vb.active or vb.void then goto continue end
 
-        if math.abs(p.x - vb.x) < 6 and
-           math.abs(p.y - vb.y) < 6 then
+        if math.abs(p.x - vb.x) < 12 and
+           math.abs(p.y - vb.y) < 12 then
             local isFalling = (p.vy * p.gravityDir < 0)
             if isFalling then
                 p.vy = PHYSICS.BOUNCE_POWER * p.gravityDir

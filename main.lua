@@ -573,7 +573,7 @@ end
 local function createPlayer(sx, sy)
     return {
         x = sx, y = screenToLogicY(sy),
-        w = 6, h = 6,
+        w = 12, h = 12,
         vx = 0, vy = 0,
         squash = 1.0, stretch = 1.0,
         grounded = true,
@@ -585,7 +585,7 @@ end
 local function createMoth(sx, sy)
     return {
         x = sx, y = screenToLogicY(sy),
-        w = 6, h = 6,
+        w = 12, h = 12,
         active = true,
         hoverOffset = math.random() * math.pi * 2,
     }
@@ -868,8 +868,8 @@ function GameLogic.checkCollisions(world)
     for _, t in ipairs(world.targets) do
         if not t.active then goto continue end
         allBaseCleared = false
-        if math.abs(p.x - t.x) < 6 and
-           math.abs(p.y - t.y) < 6 then
+        if math.abs(p.x - t.x) < 12 and
+           math.abs(p.y - t.y) < 12 then
             local isFalling = (p.vy * p.gravityDir < 0)
             if isFalling then
                 p.vy = PHYSICS.BOUNCE_POWER * p.gravityDir
