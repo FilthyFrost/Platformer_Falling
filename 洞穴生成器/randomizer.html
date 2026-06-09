@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>9:16 Cave Level Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #e5e5e5;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        /* 强制画布使用像素采样，保证放大后边缘依然是清晰的像素锯齿 */
+        #editor-canvas {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+            cursor: crosshair;
+            background-color: #000;
+        }
+        .tool-btn.active {
+            background-color: #3b82f6;
+            color: white;
+            border-color: #3b82f6;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <div class="max-w-5xl w-full grid grid-cols-1 md:grid-cols-3 gap-8">
+        
+        <!-- 左侧控制面板 -->
+        <div class="col-span-1 space-y-6 bg-gray-800 p-6 rounded-xl border border-gray-700">
+            <div>
+                <h1 class="text-2xl font-bold text-white mb-1">洞穴地图生成器 (规整网格版)</h1>
+                <p class="text-xs text-gray-400">输出尺寸: 108 x 192 (9:16)</p>
+            </div>
+
+            <!-- 生成区 -->
+            <div class="space-y-3">
+                <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">随机生成</h2>
+                <div>
+                    <label class="block text-sm mb-1">复杂度 (Level 1 - 6)</label>
+                    <input type="range" id="level-slider" min="1" max="6" value="3" class="w-full accent-blue-500">
+                    <div class="text-center text-blue-400 font-bold mt-1" id="level-display">Level 3</div>
+                </div>
+                <button id="btn-generate" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded transition-colors">
+                    随机生成地形
+                </button>
+            </div>
+
+            <hr class="border-gray-600">
+
+            <!-- 编辑区 -->
+            <div class="space-y-3">
+                <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">手动编辑</h2>
+                
+                <div class="flex space-x-2">
+                    <button id="btn-brush" class="tool-btn active flex-1 bg-gray-700 hover:bg-gray-600 border border-gray-600 py-2 rounded transition-colors">
+                        ⬜ 挖洞 (白)
+                    </button>
+                    <button id="btn-eraser" class="tool-btn flex-1 bg-gray-700 hover:bg-gray-600 border border-gray-600 py-2 rounded transition-colors">
+                        ⬛ 填岩 (黑)
+                    </button>
+                </div>
+
+                <div>
+                    <label class="block text-sm mb-1">画笔粗细: <span id="brush-size-display">10</span>px</label>
+                    <input type="range" id="brush-size" min="2" max="30" value="10" class="w-full accent-gray-400">
+                </div>
+
+                <button id="btn-clear" class="w-full bg-red-900 hover:bg-red-800 text-red-200 py-2 px-4 rounded transition-colors">
+                    清空画布 (全黑)
+                </button>
+            </div>
+
+            <hr class="border-gray-600">
+
+            <!-- 导出区 -->
+            <div>
+                <button id="btn-export" class="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-4 rounded shadow-lg transition-colors flex justify-center items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    导出 PNG
+                </button>
+            </div>
+        </div>
+
+        <!-- 右侧画布区 -->
+        <div class="col-span-2 flex justify-center items-center bg-gray-900 rounded-xl border border-gray-700 p-8">
+            <div class="relative">
+                <!-- 实际真实尺寸为 108x192，通过 CSS 放大 3 倍显示，即 324x576 -->
+                <canvas id="editor-canvas" width="108" height="192" style="width: 324px; height: 576px;"></canvas>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const canvas = document.getElementById('editor-canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        
+        // --- 核心几何常量 (根据参考图测算出的完美网格) ---
+        const WIDTH = 108;
+        const HEIGHT = 192;
+        
+        // 建立 3列 x 5行 的正交网格
+        const GRID_COLS = 3;
+        const GRID_ROWS = 5;
+        const COL_SPACING = 32; // 列间距
+        const ROW_SPACING = 36; // 行间距
+        const OFFSET_X = 22;    // X轴起始偏移，保证居中对齐 (22 + 32*2 = 86; 108-86=22)
+        const OFFSET_Y = 24;    // Y轴起始偏移，保证上下留白 (24 + 36*4 = 168; 192-168=24)
+        
+        const PATH_THICKNESS = 26; // 固定通道粗细
+
+        // UI 元素
+        const btnGenerate = document.getElementById('btn-generate');
+        const levelSlider = document.getElementById('level-slider');
+        const levelDisplay = document.getElementById('level-display');
+        const btnBrush = document.getElementById('btn-brush');
+        const btnEraser = document.getElementById('btn-eraser');
+        const brushSizeSlider = document.getElementById('brush-size');
+        const brushSizeDisplay = document.getElementById('brush-size-display');
+        const btnClear = document.getElementById('btn-clear');
+        const btnExport = document.getElementById('btn-export');
+
+        let currentTool = 'brush';
+        let isDrawing = false;
+
+        // 初始化
+        clearCanvas();
+        generateLevel(parseInt(levelSlider.value));
+
+        // --- 事件监听 ---
+        levelSlider.addEventListener('input', (e) => {
+            levelDisplay.innerText = `Level ${e.target.value}`;
+        });
+
+        brushSizeSlider.addEventListener('input', (e) => {
+            brushSizeDisplay.innerText = e.target.value;
+        });
+
+        btnGenerate.addEventListener('click', () => {
+            generateLevel(parseInt(levelSlider.value));
+        });
+
+        btnClear.addEventListener('click', clearCanvas);
+
+        btnBrush.addEventListener('click', () => {
+            currentTool = 'brush';
+            btnBrush.classList.add('active');
+            btnEraser.classList.remove('active');
+        });
+
+        btnEraser.addEventListener('click', () => {
+            currentTool = 'eraser';
+            btnEraser.classList.add('active');
+            btnBrush.classList.remove('active');
+        });
+
+        btnExport.addEventListener('click', () => {
+            const link = document.createElement('a');
+            link.download = `cave_map_L${levelSlider.value}.png`;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        });
+
+        // --- 画布手工交互 ---
+        canvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            drawAtCursor(e);
+        });
+        window.addEventListener('mouseup', () => isDrawing = false);
+        canvas.addEventListener('mousemove', (e) => {
+            if (isDrawing) drawAtCursor(e);
+        });
+
+        function drawAtCursor(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+            
+            const size = parseInt(brushSizeSlider.value);
+
+            ctx.fillStyle = currentTool === 'brush' ? 'white' : 'black';
+            ctx.beginPath();
+            ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            const boxX = Math.max(0, Math.floor(x - size/2 - 2));
+            const boxY = Math.max(0, Math.floor(y - size/2 - 2));
+            const boxW = Math.min(WIDTH - boxX, Math.ceil(size + 4));
+            const boxH = Math.min(HEIGHT - boxY, Math.ceil(size + 4));
+
+            thresholdArea(boxX, boxY, boxW, boxH);
+        }
+
+        // --- 核心算法：规整的正交网格生成 ---
+
+        function clearCanvas() {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        }
+
+        function thresholdArea(x, y, w, h) {
+            const imgData = ctx.getImageData(x, y, w, h);
+            const data = imgData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                const avg = (data[i] + data[i+1] + data[i+2]) / 3;
+                const val = avg > 127 ? 255 : 0;
+                data[i] = val;     
+                data[i+1] = val;   
+                data[i+2] = val;   
+                data[i+3] = 255;   
+            }
+            ctx.putImageData(imgData, x, y);
+        }
+
+        function generateLevel(level) {
+            clearCanvas();
+
+            // 数据结构：记录经过的节点和连线
+            let visited = new Set(['0,0', '1,0']); // 初始强制打通最左上角，作为出生平台
+            let edges = new Set(['0,0-1,0']);
+
+            function addEdge(c1, r1, c2, r2) {
+                let id = c1<=c2 && r1<=r2 ? `${c1},${r1}-${c2},${r2}` : `${c2},${r2}-${c1},${r1}`;
+                edges.add(id);
+                visited.add(`${c1},${r1}`);
+                visited.add(`${c2},${r2}`);
+            }
+
+            let maxSteps = level * 4; // 复杂度控制总长度
+            let loopsAllowed = level >= 4 ? level - 2 : 0; // 高级别允许产生"回"字形回路，从而形成黑色孤岛
+            let currentLoops = 0;
+
+            let frontier = [{c: 1, r: 0}];
+
+            // 基于正交网格的深度/广度混合搜索挖掘
+            for (let i = 0; i < maxSteps; i++) {
+                if (frontier.length === 0) break;
+
+                // 随着等级提升，更有可能产生分叉（广度），低等级倾向于一条路走到黑（深度）
+                let pickIndex = frontier.length - 1; 
+                if (Math.random() < (level - 1) * 0.15) {
+                    pickIndex = Math.floor(Math.random() * frontier.length);
+                }
+                let curr = frontier[pickIndex];
+
+                // 强制只在上下左右四个方向移动 (正交性)
+                let dirs = [
+                    {dc: 0, dr: 1}, {dc: 0, dr: 1}, // 增加向下的权重
+                    {dc: -1, dr: 0}, {dc: 1, dr: 0},
+                    {dc: 0, dr: -1}
+                ];
+                dirs.sort(() => Math.random() - 0.5);
+
+                let moved = false;
+                for (let d of dirs) {
+                    let nc = curr.c + d.dc;
+                    let nr = curr.r + d.dr;
+
+                    if (nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS) {
+                        let isVisited = visited.has(`${nc},${nr}`);
+                        let edgeId = curr.c<=nc && curr.r<=nr ? `${curr.c},${curr.r}-${nc},${nr}` : `${nc},${nr}-${curr.c},${curr.r}`;
+
+                        if (!isVisited) {
+                            addEdge(curr.c, curr.r, nc, nr);
+                            frontier.push({c: nc, r: nr});
+                            moved = true;
+                            break;
+                        } else if (!edges.has(edgeId) && currentLoops < loopsAllowed) {
+                            // 产生回路闭环（生成规整孤岛的秘密）
+                            if (Math.random() < 0.4) {
+                                addEdge(curr.c, curr.r, nc, nr);
+                                currentLoops++;
+                                moved = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!moved) {
+                    frontier.splice(pickIndex, 1);
+                    i--; // 此步作废，重新选点
+                }
+            }
+
+            // 保护机制：确保地图向下充分延伸，利用 9:16 的长画布
+            let maxTargetR = Math.min(4, level);
+            let maxCurrentR = 0;
+            visited.forEach(v => {
+                let r = parseInt(v.split(',')[1]);
+                if (r > maxCurrentR) maxCurrentR = r;
+            });
+
+            while (maxCurrentR < maxTargetR) {
+                let bottomNodes = Array.from(visited).filter(v => parseInt(v.split(',')[1]) === maxCurrentR);
+                if (bottomNodes.length === 0) break;
+                let n = bottomNodes[Math.floor(Math.random() * bottomNodes.length)];
+                let [c, r] = n.split(',').map(Number);
+                addEdge(c, r, c, r + 1);
+                frontier.push({c: c, r: r+1});
+                maxCurrentR++;
+            }
+
+            // 绘制挖掘好的正交网格
+            ctx.lineWidth = PATH_THICKNESS;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = 'white';
+            ctx.fillStyle = 'white';
+
+            // 1. 画线连接
+            edges.forEach(edge => {
+                let [p1, p2] = edge.split('-');
+                let [c1, r1] = p1.split(',').map(Number);
+                let [c2, r2] = p2.split(',').map(Number);
+
+                ctx.beginPath();
+                ctx.moveTo(OFFSET_X + c1 * COL_SPACING, OFFSET_Y + r1 * ROW_SPACING);
+                ctx.lineTo(OFFSET_X + c2 * COL_SPACING, OFFSET_Y + r2 * ROW_SPACING);
+                ctx.stroke();
+            });
+
+            // 2. 补齐每个十字路口/转角的接缝，确保拐角饱满圆润
+            visited.forEach(v => {
+                let [c, r] = v.split(',').map(Number);
+                ctx.beginPath();
+                ctx.arc(OFFSET_X + c * COL_SPACING, OFFSET_Y + r * ROW_SPACING, PATH_THICKNESS / 2, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // 3. 执行全局二值化，去除一切半透明像素，形成像素风硬朗倒角
+            thresholdArea(0, 0, WIDTH, HEIGHT);
+
+            // 4. 固定出生点
+            drawSpawnFace();
+        }
+
+        // 绘制表情
+        function drawSpawnFace() {
+            // (0,0)节点坐标为 X=22, Y=24.
+            // 通道粗细是26，所以地板Y轴大致在 24+13 = 37.
+            // 将表情画在 X=18 (偏左), Y=32 (紧贴地面) 的完美位置。
+            const faceX = 18; 
+            const faceY = 32; 
+
+            ctx.fillStyle = 'black';
+            
+            // 左眼
+            ctx.fillRect(faceX, faceY, 1, 1);
+            // 嘴巴
+            ctx.fillRect(faceX + 2, faceY + 1, 2, 1);
+            // 右眼
+            ctx.fillRect(faceX + 5, faceY, 1, 1);
+        }
+
+    </script>
+</body>
+</html>

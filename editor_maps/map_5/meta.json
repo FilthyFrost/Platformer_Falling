@@ -1,0 +1,34 @@
+{
+  "airWalls": [
+    {
+      "x": 42,
+      "y": 18
+    }
+  ],
+  "bats": [
+    {
+      "x": 30,
+      "y": 138
+    },
+    {
+      "x": 54,
+      "y": 138
+    },
+    {
+      "moveDir": "NONE",
+      "moveDist": 24,
+      "moveSpeed": 0.6,
+      "x": 78,
+      "y": 138
+    }
+  ],
+  "mirrorLines": [],
+  "name": "map_5",
+  "platformXMax": 66,
+  "platformXMin": 42,
+  "playerStart": {
+    "x": 18,
+    "y": 18
+  },
+  "voidBats": []
+}

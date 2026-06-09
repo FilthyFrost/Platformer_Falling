@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>9:16 Cave Level Generator Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #e5e5e5;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow-x: hidden;
+        }
+        /* 强制可见画布使用像素采样，保持硬派锯齿 */
+        #editor-canvas {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            box-shadow: 0 0 30px rgba(0,0,0,0.9);
+            cursor: crosshair;
+            background-color: #000;
+        }
+        .tool-btn {
+            transition: all 0.2s ease;
+        }
+        .tool-btn.active {
+            background-color: #3b82f6;
+            color: white;
+            border-color: #60a5fa;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+            transform: translateY(-2px);
+        }
+        /* 自定义精致滑块 */
+        input[type=range] {
+            height: 6px;
+            border-radius: 3px;
+            outline: none;
+            background: #4b5563;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #60a5fa;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col md:flex-row items-stretch justify-center p-4 md:p-8 gap-8">
+
+    <!-- 左侧控制面板 -->
+    <div class="w-full md:w-[400px] flex flex-col space-y-6 overflow-y-auto pb-4">
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-xl">
+            <h1 class="text-2xl font-black text-white mb-1 tracking-wide">CAVE <span class="text-blue-500">EDITOR</span></h1>
+            <p class="text-xs text-gray-400">输出分辨率: 108 x 192 (底层 9x16 网格)</p>
+        </div>
+
+        <!-- 维度参数区 -->
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-xl space-y-4">
+            <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest border-b border-gray-700 pb-2 mb-4">生成参数 (四维度控制)</h2>
+            
+            <div>
+                <div class="flex justify-between text-sm mb-1"><label>大矩形强度 (广场/大厅)</label><span id="val-rect" class="text-blue-400 font-mono">60%</span></div>
+                <input type="range" id="param-rect" min="0" max="100" value="60" class="w-full">
+            </div>
+            
+            <div>
+                <div class="flex justify-between text-sm mb-1"><label>孤岛柱子强度 (承重墙)</label><span id="val-pillar" class="text-blue-400 font-mono">30%</span></div>
+                <input type="range" id="param-pillar" min="0" max="100" value="30" class="w-full">
+            </div>
+            
+            <div>
+                <div class="flex justify-between text-sm mb-1"><label>阶梯状强度 (Z字走廊)</label><span id="val-stair" class="text-blue-400 font-mono">40%</span></div>
+                <input type="range" id="param-stair" min="0" max="100" value="40" class="w-full">
+            </div>
+
+            <div>
+                <div class="flex justify-between text-sm mb-1"><label>拇指凸起强度 (墙壁凹槽)</label><span id="val-thumb" class="text-blue-400 font-mono">50%</span></div>
+                <input type="range" id="param-thumb" min="0" max="100" value="50" class="w-full">
+            </div>
+
+            <button id="btn-generate" class="w-full mt-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 px-4 rounded shadow-lg transition-transform active:scale-95">
+                基于参数随机生成
+            </button>
+        </div>
+
+        <!-- 手动网格编辑区 -->
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-xl space-y-4">
+            <div class="flex justify-between items-end border-b border-gray-700 pb-2 mb-4">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">网格化编辑</h2>
+                <label class="flex items-center space-x-2 text-xs cursor-pointer text-gray-300 hover:text-white">
+                    <input type="checkbox" id="check-grid" checked class="form-checkbox h-4 w-4 text-blue-500 rounded bg-gray-900 border-gray-600">
+                    <span>显示辅助网格</span>
+                </label>
+            </div>
+            
+            <div class="grid grid-cols-3 gap-2">
+                <button id="btn-brush" class="tool-btn active bg-gray-700 border border-gray-600 py-3 rounded text-sm font-medium flex flex-col items-center justify-center gap-1">
+                    <span class="text-xl">⬜</span>
+                    <span>挖洞</span>
+                </button>
+                <button id="btn-eraser" class="tool-btn bg-gray-700 border border-gray-600 py-3 rounded text-sm font-medium flex flex-col items-center justify-center gap-1">
+                    <span class="text-xl">⬛</span>
+                    <span>填石</span>
+                </button>
+                <button id="btn-spawn" class="tool-btn bg-gray-700 border border-gray-600 py-3 rounded text-sm font-medium flex flex-col items-center justify-center gap-1">
+                    <span class="text-xl">🙂</span>
+                    <span>放起点</span>
+                </button>
+            </div>
+
+            <div class="mt-4">
+                <div class="flex justify-between text-sm mb-1 text-gray-400">
+                    <label>方块笔刷大小</label>
+                    <span id="val-brushsize" class="font-mono text-gray-300">1x1 格</span>
+                </div>
+                <input type="range" id="param-brushsize" min="1" max="3" value="1" step="1" class="w-full">
+            </div>
+
+            <button id="btn-clear" class="w-full mt-2 bg-gray-700 hover:bg-gray-600 text-red-400 font-bold py-2 px-4 rounded transition-colors border border-gray-600">
+                清空为全实心岩石
+            </button>
+        </div>
+
+        <!-- 导出区 -->
+        <button id="btn-export" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 px-4 rounded-xl shadow-[0_0_15px_rgba(16,185,129,0.4)] transition-transform active:scale-95 flex justify-center items-center gap-2 border border-emerald-500">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+            导出游戏级 PNG (去除辅助线)
+        </button>
+    </div>
+
+    <!-- 右侧画布区 -->
+    <div class="flex-1 flex justify-center items-center">
+        <div class="relative bg-gray-900 rounded-xl border border-gray-700 p-8 shadow-2xl">
+            <!-- CSS 放大 4 倍显示，即 432x768，确保极度清晰的编辑体验 -->
+            <canvas id="editor-canvas" width="108" height="192" style="width: 432px; height: 768px;"></canvas>
+            <div class="absolute bottom-2 right-4 text-gray-500 text-xs pointer-events-none">108x192 px</div>
+        </div>
+    </div>
+
+    <script>
+        // --- 核心网格数据层 (The Truth) ---
+        // 整个地图由 9列 x 16行 的 12px 积木块组成。
+        // 0 代表实心岩石(黑)，1 代表洞穴空洞(白)
+        const COLS = 9;
+        const ROWS = 16;
+        const CELL = 12;
+        const WIDTH = COLS * CELL;   // 108
+        const HEIGHT = ROWS * CELL;  // 192
+
+        let gridData = Array(COLS).fill(0).map(() => Array(ROWS).fill(0));
+        let spawnPos = { c: 2, r: 2 }; // 起点坐标(网格单位)
+
+        // --- 画布与渲染上下文 ---
+        const visibleCanvas = document.getElementById('editor-canvas');
+        const visibleCtx = visibleCanvas.getContext('2d', { willReadFrequently: true });
+        
+        const rawCanvas = document.createElement('canvas');
+        rawCanvas.width = WIDTH;
+        rawCanvas.height = HEIGHT;
+        const rawCtx = rawCanvas.getContext('2d', { willReadFrequently: true });
+
+        // --- UI 元素绑定 ---
+        const ui = {
+            rect: document.getElementById('param-rect'),
+            pillar: document.getElementById('param-pillar'),
+            stair: document.getElementById('param-stair'),
+            thumb: document.getElementById('param-thumb'),
+            brushSize: document.getElementById('param-brushsize'),
+            showGrid: document.getElementById('check-grid'),
+            btnBrush: document.getElementById('btn-brush'),
+            btnEraser: document.getElementById('btn-eraser'),
+            btnSpawn: document.getElementById('btn-spawn'),
+            tools: ['brush', 'eraser', 'spawn']
+        };
+
+        let currentTool = 'brush';
+        let isDrawing = false;
+
+        // --- 初始化与监听器 ---
+        function bindSliderVals() {
+            ['rect', 'pillar', 'stair', 'thumb'].forEach(key => {
+                ui[key].addEventListener('input', (e) => {
+                    document.getElementById(`val-${key}`).innerText = e.target.value + '%';
+                });
+            });
+            ui.brushSize.addEventListener('input', (e) => {
+                document.getElementById('val-brushsize').innerText = `${e.target.value}x${e.target.value} 格`;
+            });
+        }
+        bindSliderVals();
+
+        ui.tools.forEach(tool => {
+            const btn = document.getElementById(`btn-${tool}`);
+            btn.addEventListener('click', () => {
+                currentTool = tool;
+                ui.tools.forEach(t => document.getElementById(`btn-${t}`).classList.remove('active'));
+                btn.classList.add('active');
+            });
+        });
+
+        ui.showGrid.addEventListener('change', updateRender);
+        document.getElementById('btn-clear').addEventListener('click', () => { clearGrid(); updateRender(); });
+        document.getElementById('btn-generate').addEventListener('click', () => { generateLevel(); });
+        
+        document.getElementById('btn-export').addEventListener('click', () => {
+            // 导出前强制隐藏辅助网格，渲染一帧干净的图像
+            const wasGridShowing = ui.showGrid.checked;
+            ui.showGrid.checked = false;
+            updateRender();
+            
+            const link = document.createElement('a');
+            link.download = `cave_map_custom.png`;
+            link.href = visibleCanvas.toDataURL('image/png');
+            link.click();
+
+            // 恢复网格显示状态
+            ui.showGrid.checked = wasGridShowing;
+            updateRender();
+        });
+
+        // --- 手工编辑系统 (吸附至底层数据网格) ---
+        visibleCanvas.addEventListener('mousedown', (e) => { isDrawing = true; actOnGrid(e); });
+        window.addEventListener('mouseup', () => { isDrawing = false; });
+        visibleCanvas.addEventListener('mousemove', (e) => { if (isDrawing) actOnGrid(e); });
+
+        function actOnGrid(e) {
+            const rect = visibleCanvas.getBoundingClientRect();
+            const scaleX = visibleCanvas.width / rect.width;
+            const scaleY = visibleCanvas.height / rect.height;
+            const px = (e.clientX - rect.left) * scaleX;
+            const py = (e.clientY - rect.top) * scaleY;
+            
+            // 将像素坐标精确定位到底层逻辑网格坐标 (0~8, 0~15)
+            const c = Math.floor(px / CELL);
+            const r = Math.floor(py / CELL);
+
+            if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+
+            if (currentTool === 'spawn') {
+                // 点击即改变出生点，并强制把该网格掏空
+                if(isDrawing) { 
+                    spawnPos = { c, r };
+                    gridData[c][r] = 1; 
+                    isDrawing = false; // 放起点一次点击只触发一格，防止拖拽乱闪
+                }
+            } else {
+                const val = currentTool === 'brush' ? 1 : 0;
+                const bSize = parseInt(ui.brushSize.value);
+                
+                // 根据笔刷大小更新多块网格
+                for (let i = 0; i < bSize; i++) {
+                    for (let j = 0; j < bSize; j++) {
+                        if (c + i < COLS && r + j < ROWS) {
+                            gridData[c + i][r + j] = val;
+                        }
+                    }
+                }
+            }
+            updateRender();
+        }
+
+        // --- 核心渲染管线 ---
+        function clearGrid() {
+            for(let c = 0; c < COLS; c++) {
+                for(let r = 0; r < ROWS; r++) gridData[c][r] = 0;
+            }
+        }
+
+        function updateRender() {
+            // 1. 数据映射至 RawCanvas (完美的正交积木)
+            rawCtx.fillStyle = 'black';
+            rawCtx.fillRect(0, 0, WIDTH, HEIGHT);
+            rawCtx.fillStyle = 'white';
+            for (let c = 0; c < COLS; c++) {
+                for (let r = 0; r < ROWS; r++) {
+                    if (gridData[c][r] === 1) {
+                        rawCtx.fillRect(c * CELL, r * CELL, CELL, CELL);
+                    }
+                }
+            }
+
+            // 2. 复制到底层输出画板
+            visibleCtx.drawImage(rawCanvas, 0, 0);
+            
+            // 3. 执行纯数学 2px 倒角滤镜，切削直角
+            applyPixelFillet(visibleCtx, 2);
+            
+            // 4. 绘制玩家起点笑脸
+            drawSpawnFace(visibleCtx);
+
+            // 5. 叠加辅助网格UI层 (只在编辑器显示)
+            if (ui.showGrid.checked) {
+                drawOverlayGrid(visibleCtx);
+            }
+        }
+
+        // 形态学像素倒角算法
+        function applyPixelFillet(targetCtx, passes) {
+            let imgData = targetCtx.getImageData(0, 0, WIDTH, HEIGHT);
+            let data = imgData.data;
+
+            for (let pass = 0; pass < passes; pass++) {
+                let changes = [];
+                let getPixel = (x, y) => {
+                    if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT) return 0;
+                    return data[(y * WIDTH + x) * 4] > 127 ? 1 : 0;
+                };
+
+                for (let y = 0; y < HEIGHT; y++) {
+                    for (let x = 0; x < WIDTH; x++) {
+                        let p = getPixel(x, y);
+                        let n = getPixel(x, y - 1);
+                        let s = getPixel(x, y + 1);
+                        let w = getPixel(x - 1, y);
+                        let e = getPixel(x + 1, y);
+
+                        if (p === 1) { // 削去白角的尖锐直角
+                            if ((n === 0 && w === 0) || (n === 0 && e === 0) || 
+                                (s === 0 && w === 0) || (s === 0 && e === 0)) {
+                                changes.push({x, y, v: 0});
+                            }
+                        } else {       // 填补黑角的内凹尖锐直角
+                            if ((n === 1 && w === 1) || (n === 1 && e === 1) || 
+                                (s === 1 && w === 1) || (s === 1 && e === 1)) {
+                                changes.push({x, y, v: 1});
+                            }
+                        }
+                    }
+                }
+                
+                for (let c of changes) {
+                    let idx = (c.y * WIDTH + c.x) * 4;
+                    let color = c.v ? 255 : 0;
+                    data[idx] = color; data[idx+1] = color; data[idx+2] = color;
+                }
+            }
+            targetCtx.putImageData(imgData, 0, 0);
+        }
+
+        function drawSpawnFace(ctx) {
+            // 根据网格坐标定位
+            const bx = spawnPos.c * CELL;
+            const by = spawnPos.r * CELL;
+            
+            // 在 12x12 的单元格内，偏下方居中画笑脸
+            // 左眼, 嘴巴(两像素), 右眼
+            ctx.fillStyle = 'black';
+            ctx.fillRect(bx + 2, by + 8, 1, 1);     
+            ctx.fillRect(bx + 4, by + 9, 2, 1);     
+            ctx.fillRect(bx + 7, by + 8, 1, 1);     
+        }
+
+        function drawOverlayGrid(ctx) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.15)'; // 细微的半透明线
+            for (let i = 1; i < COLS; i++) ctx.fillRect(i * CELL, 0, 1, HEIGHT);
+            for (let i = 1; i < ROWS; i++) ctx.fillRect(0, i * CELL, WIDTH, 1);
+            
+            // 边框加亮
+            ctx.strokeStyle = 'rgba(59, 130, 246, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(0, 0, WIDTH, HEIGHT);
+        }
+
+        // --- 全新维度驱动生成算法 ---
+        function generateLevel() {
+            clearGrid();
+
+            // 提取四大维度参数 (转为 0~1 的概率概率)
+            const pRect = parseInt(ui.rect.value) / 100;
+            const pPillar = parseInt(ui.pillar.value) / 100;
+            const pStair = parseInt(ui.stair.value) / 100;
+            const pThumb = parseInt(ui.thumb.value) / 100;
+
+            // 辅助函数：操作数据层
+            function carve(c, r, w, h) {
+                for(let i=0; i<w; i++){
+                    for(let j=0; j<h; j++){
+                        if(c+i>=0 && c+i<COLS && r+j>=0 && r+j<ROWS) gridData[c+i][r+j] = 1;
+                    }
+                }
+            }
+
+            // 初始化：保护出生点与基础大厅
+            spawnPos = { c: 2, r: 1 };
+            carve(1, 1, 3, 2); 
+
+            let cx = 2; 
+            let cy = 2;
+            let totalFeatures = 10 + Math.floor(Math.random() * 8);
+
+            for (let i = 0; i < totalFeatures; i++) {
+                let rnd = Math.random();
+
+                if (rnd < pRect) {
+                    // 生成大/小矩形
+                    let w = 2 + Math.floor(Math.random() * 3);
+                    let h = 2 + Math.floor(Math.random() * 3);
+                    // 为了美观，稍微偏移中心点
+                    let nx = Math.max(1, Math.min(COLS - w - 1, cx - Math.floor(w/2) + (Math.random()>0.5?1:-1)));
+                    carve(nx, cy, w, h);
+                    cx = nx + Math.floor(w/2);
+                    cy += h - 1;
+                } 
+                else if (rnd < pRect + pStair) {
+                    // 生成对角阶梯
+                    let steps = 2 + Math.floor(Math.random() * 3);
+                    let dir = Math.random() > 0.5 ? 1 : -1;
+                    for(let s = 0; s < steps; s++) {
+                        carve(cx, cy, 2, 2);
+                        cx += dir;
+                        cy += 1;
+                        cx = Math.max(1, Math.min(COLS-2, cx)); 
+                    }
+                } 
+                else {
+                    // 普通直通管道
+                    let w = 2 + Math.floor(Math.random() * 2);
+                    let h = 3 + Math.floor(Math.random() * 3);
+                    cx = Math.max(1, Math.min(COLS - w - 1, cx));
+                    carve(cx, cy, w, h);
+                    cy += h - 1;
+                }
+
+                // 拇指凸起检测
+                if (Math.random() < pThumb) {
+                    let thumbW = 1 + Math.floor(Math.random() * 2);
+                    let thumbH = 1 + Math.floor(Math.random() * 2);
+                    let sideDir = Math.random() > 0.5 ? thumbW : -thumbW;
+                    let tx = Math.max(0, Math.min(COLS - thumbW, cx + sideDir));
+                    carve(tx, cy - 1, thumbW, thumbH);
+                }
+
+                if (cy >= ROWS - 2) break; // 到底了
+            }
+
+            // 强制打通至底部，防止生成死图
+            carve(Math.max(1, Math.min(COLS-3, cx)), cy, 2, ROWS - cy);
+
+            // 后处理：孤岛柱子生成
+            if (pPillar > 0) {
+                // 根据概率计算要生成的柱子数量
+                let numIslands = Math.floor(pPillar * 5); 
+                for(let i = 0; i < numIslands; i++) {
+                    let ic = 1 + Math.floor(Math.random() * (COLS - 3));
+                    let ir = 3 + Math.floor(Math.random() * (ROWS - 5));
+                    
+                    // 检查这块地方是否是开阔的白地 (3x3区域都是白，中间才可以立柱子)
+                    let canPlace = true;
+                    for(let x=0; x<3; x++) {
+                        for(let y=0; y<3; y++) {
+                            if(gridData[ic+x][ir+y] === 0) canPlace = false;
+                        }
+                    }
+                    if (canPlace) {
+                        let w = 1 + Math.floor(Math.random() * 2);
+                        let h = 1 + Math.floor(Math.random() * 2);
+                        // 填成黑色实体
+                        for(let x=0; x<w; x++) {
+                            for(let y=0; y<h; y++) {
+                                gridData[ic+1+x][ir+1+y] = 0; 
+                            }
+                        }
+                    }
+                }
+            }
+
+            updateRender();
+        }
+
+        // 初始化加载渲染
+        generateLevel();
+        
+    </script>
+</body>
+</html>

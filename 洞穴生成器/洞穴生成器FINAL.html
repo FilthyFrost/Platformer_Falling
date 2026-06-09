@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>9:16 Cave Level Generator Ultimate</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #121212;
+            color: #e5e5e5;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow-x: hidden;
+        }
+        /* 强制画布像素采样，保持绝对硬朗的像素风边界 */
+        #editor-canvas {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            box-shadow: 0 0 40px rgba(0,0,0,1);
+            cursor: crosshair;
+            background-color: #000;
+            border: 2px solid #333;
+        }
+        .tool-group {
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 0.75rem;
+            padding: 1rem;
+        }
+        .btn-select {
+            transition: all 0.15s ease;
+            background: #374151;
+            border: 1px solid #4b5563;
+        }
+        .btn-select:hover {
+            background: #4b5563;
+        }
+        .btn-select.active {
+            background: #2563eb;
+            color: white;
+            border-color: #60a5fa;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.4);
+            transform: translateY(-1px);
+        }
+        input[type=range] {
+            height: 6px;
+            border-radius: 3px;
+            outline: none;
+            background: #4b5563;
+            -webkit-appearance: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #60a5fa;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col xl:flex-row items-center xl:items-stretch justify-center p-4 xl:p-8 gap-8">
+
+    <!-- 左侧控制面板 -->
+    <div class="w-full max-w-[480px] flex flex-col space-y-4">
+        
+        <div class="tool-group flex justify-between items-center">
+            <div>
+                <h1 class="text-2xl font-black text-white tracking-wider">CAVE <span class="text-blue-500">ENGINE</span></h1>
+                <p class="text-xs text-blue-400 font-bold mt-1">智能生长 + 矢量布尔运算</p>
+            </div>
+            <label class="flex items-center space-x-2 text-sm cursor-pointer text-gray-300 hover:text-white bg-gray-800 px-3 py-2 rounded border border-gray-700">
+                <input type="checkbox" id="check-grid" checked class="form-checkbox h-4 w-4 text-blue-500 rounded">
+                <span>显示辅助网格</span>
+            </label>
+        </div>
+
+        <!-- 第一组：手动编辑核心工具箱 -->
+        <div class="tool-group space-y-4">
+            <h2 class="text-xs font-bold text-gray-400 uppercase tracking-widest border-b border-gray-700 pb-2">1. 工作模式 (加法/减法)</h2>
+            <div class="grid grid-cols-3 gap-2">
+                <button id="mode-dig" class="btn-select active py-2 rounded text-sm font-bold">⬜ 挖洞 (空白)</button>
+                <button id="mode-build" class="btn-select py-2 rounded text-sm font-bold">⬛ 填石 (实体)</button>
+                <button id="mode-spawn" class="btn-select py-2 rounded text-sm font-bold border-dashed border-emerald-500 text-emerald-400">🙂 放起点</button>
+            </div>
+
+            <h2 class="text-xs font-bold text-gray-400 uppercase tracking-widest border-b border-gray-700 pb-2 pt-2">2. 几何笔刷 (形状印章)</h2>
+            <div class="grid grid-cols-4 gap-2">
+                <button id="shape-rect" class="btn-select active py-3 rounded flex flex-col items-center gap-1">
+                    <span class="text-xl">🔲</span><span class="text-xs">方块</span>
+                </button>
+                <button id="shape-stair" class="btn-select py-3 rounded flex flex-col items-center gap-1">
+                    <span class="text-xl">📐</span><span class="text-xs">阶梯三角</span>
+                </button>
+                <button id="shape-thumb" class="btn-select py-3 rounded flex flex-col items-center gap-1">
+                    <span class="text-xl">👍</span><span class="text-xs">拇指半圆</span>
+                </button>
+                <button id="shape-island" class="btn-select py-3 rounded flex flex-col items-center gap-1 tooltip" title="自带一圈白色缓冲带的黑色悬空方块">
+                    <span class="text-xl">🏝️</span><span class="text-xs">独立孤岛</span>
+                </button>
+            </div>
+
+            <!-- 动态显示的方向控制器 -->
+            <div id="panel-direction" class="hidden space-y-2 pt-2">
+                <h2 class="text-xs font-bold text-blue-400 uppercase tracking-widest">3. 几何朝向</h2>
+                <div class="grid grid-cols-4 gap-2" id="dir-buttons">
+                    <button class="btn-select dir-btn active py-2 rounded text-lg" data-dir="tl">◤</button>
+                    <button class="btn-select dir-btn py-2 rounded text-lg" data-dir="tr">◥</button>
+                    <button class="btn-select dir-btn py-2 rounded text-lg" data-dir="bl">◣</button>
+                    <button class="btn-select dir-btn py-2 rounded text-lg" data-dir="br">◢</button>
+                </div>
+            </div>
+
+            <div class="pt-2">
+                <div class="flex justify-between text-xs mb-1 text-gray-400">
+                    <label>笔刷尺寸倍率</label>
+                    <span id="val-brushsize" class="font-mono text-white">1x (12px)</span>
+                </div>
+                <input type="range" id="param-brushsize" min="1" max="4" value="1" step="1" class="w-full">
+            </div>
+        </div>
+
+        <!-- 第二组：自动生成器 -->
+        <div class="tool-group space-y-3">
+            <h2 class="text-xs font-bold text-gray-400 uppercase tracking-widest border-b border-gray-700 pb-2">参数化一键智能生成 (保证全通)</h2>
+            
+            <div class="grid grid-cols-2 gap-x-4 gap-y-3">
+                <div>
+                    <div class="flex justify-between text-xs mb-1"><label>🔲 矩形广场</label><span id="val-p-rect" class="text-blue-400">50%</span></div>
+                    <input type="range" id="param-p-rect" min="0" max="100" value="50" class="w-full">
+                </div>
+                <div>
+                    <div class="flex justify-between text-xs mb-1"><label>📐 阶梯对角壁</label><span id="val-p-stair" class="text-blue-400">60%</span></div>
+                    <input type="range" id="param-p-stair" min="0" max="100" value="60" class="w-full">
+                </div>
+                <div>
+                    <div class="flex justify-between text-xs mb-1"><label>👍 拇指凸起</label><span id="val-p-thumb" class="text-blue-400">40%</span></div>
+                    <input type="range" id="param-p-thumb" min="0" max="100" value="40" class="w-full">
+                </div>
+                <div>
+                    <div class="flex justify-between text-xs mb-1"><label>🏝️ 悬空孤岛</label><span id="val-p-island" class="text-blue-400">30%</span></div>
+                    <input type="range" id="param-p-island" min="0" max="100" value="30" class="w-full">
+                </div>
+            </div>
+
+            <div class="flex gap-2 pt-2">
+                <button id="btn-clear" class="flex-1 bg-red-900/50 hover:bg-red-800 text-red-300 font-bold py-2 rounded transition-colors border border-red-700/50">
+                    清空重置
+                </button>
+                <button id="btn-generate" class="flex-[2] bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded shadow-lg transition-transform active:scale-95">
+                    安全智能生成
+                </button>
+            </div>
+        </div>
+
+        <button id="btn-export" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-transform active:scale-95 flex justify-center items-center gap-2 border border-emerald-500">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+            导出 PNG (自动隐藏网格)
+        </button>
+    </div>
+
+    <!-- 右侧画布区 -->
+    <div class="flex justify-center items-center relative">
+        <div class="bg-gray-900 rounded-xl border-4 border-gray-700 p-4 shadow-2xl relative">
+            <!-- 放大 4 倍显示 -->
+            <canvas id="editor-canvas" width="108" height="192" style="width: 432px; height: 768px;"></canvas>
+            <!-- 画布悬浮光标预览框 -->
+            <div id="cursor-preview" class="absolute pointer-events-none border-2 border-blue-500/50 bg-blue-500/20 hidden" style="width: 48px; height: 48px; z-index: 10;"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- 核心架构：纯正的像素画布布尔引擎 ---
+        const COLS = 9, ROWS = 16, CELL = 12;
+        const WIDTH = COLS * CELL, HEIGHT = ROWS * CELL;
+
+        // 真实数据保存在隐藏画布中
+        const rawCanvas = document.createElement('canvas');
+        rawCanvas.width = WIDTH; rawCanvas.height = HEIGHT;
+        const rawCtx = rawCanvas.getContext('2d', { willReadFrequently: true });
+        rawCtx.imageSmoothingEnabled = false; 
+
+        const visibleCanvas = document.getElementById('editor-canvas');
+        const visibleCtx = visibleCanvas.getContext('2d', { willReadFrequently: true });
+        visibleCtx.imageSmoothingEnabled = false;
+
+        let spawnPos = { c: 2, r: 1 }; 
+        let isDrawing = false;
+
+        // --- 状态机 ---
+        let state = {
+            mode: 'dig',      // dig (白), build (黑), spawn
+            shape: 'rect',    // rect, stair, thumb, island
+            dir: 'tl',        // tl, tr, bl, br (方向)
+            size: 1           // 1~4
+        };
+
+        // --- UI 绑定逻辑 ---
+        const bindBtnGroup = (prefix, key, callback) => {
+            document.querySelectorAll(`[id^="${prefix}-"]`).forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    document.querySelectorAll(`[id^="${prefix}-"]`).forEach(b => b.classList.remove('active'));
+                    e.currentTarget.classList.add('active');
+                    state[key] = e.currentTarget.id.replace(`${prefix}-`, '');
+                    if(callback) callback();
+                });
+            });
+        };
+
+        bindBtnGroup('mode', 'mode', updateCursorPreview);
+        bindBtnGroup('shape', 'shape', () => {
+            const panel = document.getElementById('panel-direction');
+            if (state.shape === 'stair' || state.shape === 'thumb') {
+                panel.classList.remove('hidden');
+                const btns = document.querySelectorAll('.dir-btn');
+                if (state.shape === 'stair') {
+                    btns[0].innerText = '◤'; btns[1].innerText = '◥'; btns[2].innerText = '◣'; btns[3].innerText = '◢';
+                } else {
+                    btns[0].innerText = '⬆'; btns[1].innerText = '➡'; btns[2].innerText = '⬇'; btns[3].innerText = '⬅';
+                }
+            } else {
+                panel.classList.add('hidden');
+            }
+            updateCursorPreview();
+        });
+
+        document.querySelectorAll('.dir-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.dir-btn').forEach(b => b.classList.remove('active'));
+                e.currentTarget.classList.add('active');
+                const idx = Array.from(e.currentTarget.parentNode.children).indexOf(e.currentTarget);
+                const dirMap = ['tl', 'tr', 'bl', 'br'];
+                state.dir = dirMap[idx];
+                updateCursorPreview();
+            });
+        });
+
+        document.getElementById('param-brushsize').addEventListener('input', (e) => {
+            state.size = parseInt(e.target.value);
+            document.getElementById('val-brushsize').innerText = `${state.size}x (${state.size * CELL}px)`;
+            updateCursorPreview();
+        });
+
+        ['rect', 'stair', 'thumb', 'island'].forEach(key => {
+            document.getElementById(`param-p-${key}`).addEventListener('input', (e) => {
+                document.getElementById(`val-p-${key}`).innerText = e.target.value + '%';
+            });
+        });
+
+        document.getElementById('check-grid').addEventListener('change', updateRender);
+        document.getElementById('btn-clear').addEventListener('click', () => { fillCanvas('black'); updateRender(); });
+        document.getElementById('btn-generate').addEventListener('click', () => { generateLevel(); });
+
+        document.getElementById('btn-export').addEventListener('click', () => {
+            const wasGridShowing = document.getElementById('check-grid').checked;
+            document.getElementById('check-grid').checked = false;
+            updateRender();
+            
+            const link = document.createElement('a');
+            link.download = `cave_ultimate_connected.png`;
+            link.href = visibleCanvas.toDataURL('image/png');
+            link.click();
+
+            document.getElementById('check-grid').checked = wasGridShowing;
+            updateRender();
+        });
+
+        // --- 核心矢量印章引擎 ---
+        function fillCanvas(color) {
+            rawCtx.fillStyle = color;
+            rawCtx.fillRect(0, 0, WIDTH, HEIGHT);
+        }
+
+        function stampStair(ctx, x, y, sizePx, dir) {
+            ctx.beginPath();
+            if(dir==='tl'){ ctx.moveTo(x,y); ctx.lineTo(x+sizePx,y); ctx.lineTo(x,y+sizePx); }
+            if(dir==='tr'){ ctx.moveTo(x,y); ctx.lineTo(x+sizePx,y); ctx.lineTo(x+sizePx,y+sizePx); }
+            if(dir==='bl'){ ctx.moveTo(x,y); ctx.lineTo(x+sizePx,y+sizePx); ctx.lineTo(x,y+sizePx); }
+            if(dir==='br'){ ctx.moveTo(x+sizePx,y); ctx.lineTo(x+sizePx,y+sizePx); ctx.lineTo(x,y+sizePx); }
+            ctx.fill();
+        }
+
+        function stampThumb(ctx, x, y, sizePx, dir) {
+            ctx.beginPath();
+            let r = sizePx / 2;
+            if(dir==='tl') { /* UP bump */ ctx.arc(x+r, y+r, r, Math.PI, 0); ctx.fillRect(x, y+r, sizePx, sizePx-r); }
+            if(dir==='tr') { /* RIGHT bump */ ctx.arc(x+sizePx-r, y+r, r, -Math.PI/2, Math.PI/2); ctx.fillRect(x, y, sizePx-r, sizePx); }
+            if(dir==='bl') { /* DOWN bump */ ctx.arc(x+r, y+sizePx-r, r, 0, Math.PI); ctx.fillRect(x, y, sizePx, sizePx-r); }
+            if(dir==='br') { /* LEFT bump */ ctx.arc(x+r, y+r, r, Math.PI/2, Math.PI*1.5); ctx.fillRect(x+r, y, sizePx-r, sizePx); }
+            ctx.fill();
+        }
+
+        // --- 手动交互 ---
+        const cursorPreview = document.getElementById('cursor-preview');
+        
+        function updateCursorPreview(e) {
+            if(!e) return;
+            const rect = visibleCanvas.getBoundingClientRect();
+            const scaleX = visibleCanvas.width / rect.width;
+            const scaleY = visibleCanvas.height / rect.height;
+            const px = (e.clientX - rect.left) * scaleX;
+            const py = (e.clientY - rect.top) * scaleY;
+            
+            const c = Math.floor(px / CELL);
+            const r = Math.floor(py / CELL);
+
+            const displayScale = 4;
+            const sizePx = state.size * CELL * displayScale;
+            
+            cursorPreview.style.display = 'block';
+            cursorPreview.style.width = sizePx + 'px';
+            cursorPreview.style.height = sizePx + 'px';
+            cursorPreview.style.left = (c * CELL * displayScale + 16) + 'px';
+            cursorPreview.style.top = (r * CELL * displayScale + 16) + 'px';
+
+            if (state.mode === 'spawn') cursorPreview.style.borderColor = '#10b981';
+            else if (state.mode === 'build' || state.shape === 'island') cursorPreview.style.borderColor = '#ef4444';
+            else cursorPreview.style.borderColor = '#3b82f6';
+        }
+
+        visibleCanvas.addEventListener('mousemove', (e) => {
+            updateCursorPreview(e);
+            if (isDrawing) actOnGrid(e);
+        });
+        visibleCanvas.addEventListener('mouseleave', () => { cursorPreview.style.display = 'none'; });
+        visibleCanvas.addEventListener('mousedown', (e) => { isDrawing = true; actOnGrid(e); });
+        window.addEventListener('mouseup', () => { isDrawing = false; });
+
+        function actOnGrid(e) {
+            const rect = visibleCanvas.getBoundingClientRect();
+            const px = (e.clientX - rect.left) * (visibleCanvas.width / rect.width);
+            const py = (e.clientY - rect.top) * (visibleCanvas.height / rect.height);
+            
+            const c = Math.floor(px / CELL);
+            const r = Math.floor(py / CELL);
+            if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+
+            const x = c * CELL;
+            const y = r * CELL;
+            const sizePx = state.size * CELL;
+
+            if (state.mode === 'spawn') {
+                if(isDrawing) { 
+                    spawnPos = { c, r };
+                    rawCtx.fillStyle = 'white';
+                    rawCtx.fillRect(x, y, CELL, CELL);
+                    isDrawing = false; 
+                }
+            } else {
+                rawCtx.fillStyle = state.mode === 'dig' ? 'white' : 'black';
+
+                if (state.shape === 'rect') {
+                    rawCtx.fillRect(x, y, sizePx, sizePx);
+                } else if (state.shape === 'stair') {
+                    stampStair(rawCtx, x, y, sizePx, state.dir);
+                } else if (state.shape === 'thumb') {
+                    stampThumb(rawCtx, x, y, sizePx, state.dir);
+                } else if (state.shape === 'island') {
+                    if (isDrawing) {
+                        rawCtx.fillStyle = 'white';
+                        rawCtx.fillRect(x - CELL, y - CELL, sizePx + 2*CELL, sizePx + 2*CELL);
+                        rawCtx.fillStyle = 'black';
+                        rawCtx.fillRect(x, y, sizePx, sizePx);
+                        isDrawing = false; 
+                    }
+                }
+            }
+            updateRender();
+        }
+
+        // --- 渲染管线 ---
+        function updateRender() {
+            const imgData = rawCtx.getImageData(0, 0, WIDTH, HEIGHT);
+            const data = imgData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                const isWhite = (data[i] + data[i+1] + data[i+2]) > 380;
+                const val = isWhite ? 255 : 0;
+                data[i] = val; data[i+1] = val; data[i+2] = val; data[i+3] = 255;
+            }
+            visibleCtx.putImageData(imgData, 0, 0);
+            drawSpawnFace(visibleCtx);
+            if (document.getElementById('check-grid').checked) drawOverlayGrid(visibleCtx);
+        }
+
+        function drawSpawnFace(ctx) {
+            const bx = spawnPos.c * CELL;
+            const by = spawnPos.r * CELL;
+            ctx.fillStyle = 'black';
+            ctx.fillRect(bx + 2, by + 8, 1, 1);     
+            ctx.fillRect(bx + 4, by + 9, 2, 1);     
+            ctx.fillRect(bx + 7, by + 8, 1, 1);     
+        }
+
+        function drawOverlayGrid(ctx) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.15)'; 
+            for (let i = 1; i < COLS; i++) ctx.fillRect(i * CELL, 0, 1, HEIGHT);
+            for (let i = 1; i < ROWS; i++) ctx.fillRect(0, i * CELL, WIDTH, 1);
+            ctx.strokeStyle = 'rgba(59, 130, 246, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(0, 0, WIDTH, HEIGHT);
+        }
+
+        // --- 【重大修复】智能安全生成算法：绝对保证空间连通！ ---
+        function generateLevel() {
+            fillCanvas('black'); 
+
+            const pRect = parseInt(document.getElementById('param-p-rect').value) / 100;
+            const pStair = parseInt(document.getElementById('param-p-stair').value) / 100;
+            const pThumb = parseInt(document.getElementById('param-p-thumb').value) / 100;
+            const pIsland = parseInt(document.getElementById('param-p-island').value) / 100;
+
+            // 维护一个底层逻辑网格，1=白(畅通)，0=黑(岩石)
+            let grid = Array(COLS).fill(0).map(() => Array(ROWS).fill(0));
+
+            function carve(c, r, w, h) {
+                for(let i=0; i<w; i++){
+                    for(let j=0; j<h; j++){
+                        if(c+i>=0 && c+i<COLS && r+j>=0 && r+j<ROWS) grid[c+i][r+j] = 1;
+                    }
+                }
+            }
+
+            // 第一阶段：保证 100% 连通的"大树干"
+            let cx = 3;
+            for(let cy = 1; cy < ROWS - 1; cy++) {
+                carve(cx, cy, 3, 2); // 开凿一条极其宽敞(3格宽)的主通道，贯穿到底部
+                let drift = Math.random();
+                if (drift < 0.4) cx += 1;
+                else if (drift < 0.8) cx -= 1;
+                cx = Math.max(1, Math.min(COLS - 4, cx));
+            }
+
+            // 第二阶段：安全扩张广场
+            let numRects = pRect * 25;
+            for(let i=0; i<numRects; i++) {
+                let w = 2 + Math.floor(Math.random() * 3);
+                let h = 2 + Math.floor(Math.random() * 3);
+                let x = 1 + Math.floor(Math.random() * (COLS - w - 1));
+                let y = 1 + Math.floor(Math.random() * (ROWS - h - 1));
+                
+                // 只有当新房间与主干道接壤时才生成，杜绝产生断层和孤立房间
+                let overlaps = false;
+                for(let dx=0; dx<w; dx++){
+                    for(let dy=0; dy<h; dy++){
+                        if (grid[x+dx][y+dy] === 1) overlaps = true;
+                    }
+                }
+                if (overlaps) carve(x, y, w, h);
+            }
+
+            // 绘制白色基础网格到画布
+            rawCtx.fillStyle = 'white';
+            for (let c=0; c<COLS; c++) {
+                for (let r=0; r<ROWS; r++) {
+                    if (grid[c][r] === 1) rawCtx.fillRect(c*CELL, r*CELL, CELL, CELL);
+                }
+            }
+
+            // 第三阶段：智能边缘雕刻 (只在确保不会切断通道的地方做扣减)
+            for (let c=1; c<COLS-1; c++) {
+                for (let r=1; r<ROWS-1; r++) {
+                    if (grid[c][r] !== 1) continue; // 必须是白色空间内
+
+                    let n = grid[c][r-1]===0, s = grid[c][r+1]===0;
+                    let w = grid[c-1][r]===0, e = grid[c+1][r]===0;
+                    
+                    // 1. 阶梯墙壁 (只雕刻白色空间的直角内弯处)
+                    let isCorner = (n && w) || (n && e) || (s && w) || (s && e);
+                    if (isCorner && Math.random() < pStair) {
+                        rawCtx.fillStyle = 'black';
+                        if (n && w) stampStair(rawCtx, c*CELL, r*CELL, CELL, 'tl');
+                        else if (n && e) stampStair(rawCtx, c*CELL, r*CELL, CELL, 'tr');
+                        else if (s && w) stampStair(rawCtx, c*CELL, r*CELL, CELL, 'bl');
+                        else if (s && e) stampStair(rawCtx, c*CELL, r*CELL, CELL, 'br');
+                        grid[c][r] = 2; // 标记此处已被雕刻
+                        continue;
+                    }
+
+                    // 2. 拇指墙壁凸起 (只在平整墙壁上长出，并且确认另一侧有极宽的通道)
+                    let isWall = (n && !s && !w && !e) || (s && !n && !w && !e) || 
+                                 (w && !n && !s && !e) || (e && !n && !s && !w);
+                    if (isWall && Math.random() < pThumb) {
+                        rawCtx.fillStyle = 'black';
+                        // 左墙是实心 -> 拇指向右凸起 (tr) -> 要求对面还有两格以上的白地，绝对不断头
+                        if (w && grid[c+1][r]===1 && grid[c+2] && grid[c+2][r]===1) {
+                            stampThumb(rawCtx, c*CELL, r*CELL, CELL, 'tr'); grid[c][r] = 2;
+                        } 
+                        else if (e && grid[c-1][r]===1 && grid[c-2] && grid[c-2][r]===1) {
+                            stampThumb(rawCtx, c*CELL, r*CELL, CELL, 'br'); grid[c][r] = 2;
+                        } 
+                        else if (n && grid[c][r+1]===1 && grid[c][r+2]===1) {
+                            stampThumb(rawCtx, c*CELL, r*CELL, CELL, 'bl'); grid[c][r] = 2;
+                        } 
+                        else if (s && grid[c][r-1]===1 && grid[c][r-2]===1) {
+                            stampThumb(rawCtx, c*CELL, r*CELL, CELL, 'tl'); grid[c][r] = 2;
+                        }
+                    }
+                }
+            }
+
+            // 第四阶段：安全孤岛生成 (绝对不挡路)
+            let numIslands = pIsland * 12;
+            for(let i=0; i<numIslands; i++) {
+                let c = 2 + Math.floor(Math.random() * (COLS - 4));
+                let r = 2 + Math.floor(Math.random() * (ROWS - 4));
+                
+                // 扫描一个 3x3 的区域，只有这里全都是纯净的白色，才在正中间种下一个黑柱子
+                let safe = true;
+                for(let dx=-1; dx<=1; dx++){
+                    for(let dy=-1; dy<=1; dy++){
+                        if(grid[c+dx][r+dy] !== 1) safe = false;
+                    }
+                }
+                if(safe) {
+                    rawCtx.fillStyle = 'black';
+                    let w = Math.random() > 0.5 ? 2 : 1;
+                    let h = Math.random() > 0.5 ? 2 : 1;
+                    rawCtx.fillRect(c*CELL, r*CELL, w*CELL, h*CELL);
+                    // 种下后标记周围不可再种，防止孤岛连成片
+                    for(let dx=-1; dx<=w; dx++){
+                        for(let dy=-1; dy<=h; dy++){
+                            grid[c+dx][r+dy] = 2;
+                        }
+                    }
+                }
+            }
+
+            // 第五阶段：确保起点始终有一个安稳宽敞的安全屋
+            spawnPos = { c: 2, r: 1 };
+            rawCtx.fillStyle = 'white';
+            rawCtx.fillRect(1*CELL, 1*CELL, 3*CELL, 2*CELL);
+
+            updateRender();
+        }
+
+        // 初始化
+        fillCanvas('black');
+        generateLevel();
+        
+    </script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 --[[
-    Level Data for Cave Fall (v5)
-    Includes platform walkable bounds.
+    Level Data for Cave Fall
+    Generated from editor_maps
     All coordinates in SCREEN SPACE (Y-down), 108x192
 ]]
 
@@ -9,127 +9,156 @@ local levels = {}
 levels[1] = {
     stencilFile = "maps/level_1_stencil.png",
     textureFile = "maps/level_1_texture.png",
-    playerStart = {x = 22, y = 74},
-    platformXMin = 9,
-    platformXMax = 33,
+    playerStart = {x = 18, y = 78},
+    platformXMin = 12,
+    platformXMax = 24,
     bats = {
-        {x = 68, y = 68},
-        {x = 84, y = 111},
-        {x = 46, y = 133},
+        {x = 90, y = 90, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 66, y = 90, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
     },
+    voidBats = {
+    },
+    mirrorLines = {
+    },
+    airWalls = {
+        {x = 30, y = 78},
+        {x = 6, y = 78},
+    },
+    spawnPlatform = {x = 12, y = 82, width = 12},
 }
 
 levels[2] = {
     stencilFile = "maps/level_2_stencil.png",
     textureFile = "maps/level_2_texture.png",
-    playerStart = {x = 89, y = 72},
-    platformXMin = 75,
-    platformXMax = 94,
+    playerStart = {x = 30, y = 18},
+    platformXMin = 0,
+    platformXMax = 36,
     bats = {
-        {x = 56, y = 73},
-        {x = 25, y = 74},
-        {x = 56, y = 126},
+        {x = 54, y = 54, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 30, y = 66, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 18, y = 78, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
     },
+    voidBats = {
+    },
+    mirrorLines = {
+    },
+    airWalls = {
+        {x = 42, y = 18},
+    },
+    spawnPlatform = {x = 0, y = 22, width = 36},
 }
 
 levels[3] = {
     stencilFile = "maps/level_3_stencil.png",
     textureFile = "maps/level_3_texture.png",
-    playerStart = {x = 31, y = 59},
-    platformXMin = 20,
-    platformXMax = 42,
+    playerStart = {x = 18, y = 42},
+    platformXMin = 0,
+    platformXMax = 107,
     bats = {
-        {x = 55, y = 76},
-        {x = 33, y = 122},
-        {x = 55, y = 155},
+        {x = 18, y = 102, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 42, y = 162, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 78, y = 174, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
     },
+    voidBats = {
+    },
+    mirrorLines = {
+    },
+    airWalls = {
+    },
+    spawnPlatform = {x = 0, y = 46, width = 107},
 }
 
 levels[4] = {
     stencilFile = "maps/level_4_stencil.png",
     textureFile = "maps/level_4_texture.png",
-    playerStart = {x = 55, y = 70},
-    platformXMin = 46,
-    platformXMax = 97,
+    playerStart = {x = 30, y = 48},
+    platformXMin = 12,
+    platformXMax = 36,
     bats = {
-        {x = 80, y = 72},
-        {x = 56, y = 126},
-        {x = 76, y = 150},
+        {x = 30, y = 114, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 78, y = 60, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 72, y = 150, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 54, y = 132, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
     },
+    voidBats = {
+    },
+    mirrorLines = {
+    },
+    airWalls = {
+        {x = 42, y = 48},
+        {x = 6, y = 48},
+    },
+    spawnPlatform = {x = 12, y = 52, width = 24},
 }
 
 levels[5] = {
     stencilFile = "maps/level_5_stencil.png",
     textureFile = "maps/level_5_texture.png",
-    playerStart = {x = 28, y = 51},
-    platformXMin = 13,
+    playerStart = {x = 18, y = 18},
+    platformXMin = 0,
     platformXMax = 36,
     bats = {
-        {x = 81, y = 66},
-        {x = 33, y = 101},
-        {x = 54, y = 153},
+        {x = 30, y = 138, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 54, y = 138, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 78, y = 138, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
     },
+    voidBats = {
+    },
+    mirrorLines = {
+    },
+    airWalls = {
+        {x = 42, y = 18},
+    },
+    spawnPlatform = {x = 0, y = 22, width = 36},
 }
 
 levels[6] = {
     stencilFile = "maps/level_6_stencil.png",
     textureFile = "maps/level_6_texture.png",
-    playerStart = {x = 21, y = 70},
-    platformXMin = 13,
-    platformXMax = 30,
+    playerStart = {x = 18, y = 30},
+    platformXMin = 0,
+    platformXMax = 48,
     bats = {
-        {x = 93, y = 91},
-        {x = 21, y = 118},
-        {x = 75, y = 118},
-        {x = 40, y = 143},
+        {x = 66, y = 90, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 90, y = 90, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 18, y = 138, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 42, y = 150, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 66, y = 150, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 90, y = 174, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
     },
+    voidBats = {
+    },
+    mirrorLines = {
+    },
+    airWalls = {
+        {x = 54, y = 30},
+    },
+    spawnPlatform = {x = 0, y = 34, width = 48},
 }
 
 levels[7] = {
     stencilFile = "maps/level_7_stencil.png",
     textureFile = "maps/level_7_texture.png",
-    playerStart = {x = 56, y = 46},
-    platformXMin = 48,
-    platformXMax = 65,
+    playerStart = {x = 18, y = 30},
+    platformXMin = 0,
+    platformXMax = 24,
     bats = {
-        {x = 37, y = 58},
-        {x = 77, y = 61},
-        {x = 76, y = 115},
-        {x = 38, y = 117},
-        {x = 75, y = 171},
-        {x = 39, y = 173},
+        {x = 42, y = 54, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 66, y = 54, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 90, y = 126, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 54, y = 126, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 84, y = 168, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
+        {x = 24, y = 132, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6},
     },
-}
-
-levels[8] = {
-    stencilFile = "maps/level_8_stencil.png",
-    textureFile = "maps/level_8_texture.png",
-    playerStart = {x = 87, y = 77},
-    platformXMin = 71,
-    platformXMax = 96,
-    bats = {
-        {x = 18, y = 90},
-        {x = 55, y = 90},
-        {x = 88, y = 106},
-        {x = 35, y = 132},
-        {x = 72, y = 134},
+    voidBats = {
     },
-}
-
-levels[9] = {
-    stencilFile = "maps/level_9_stencil.png",
-    textureFile = "maps/level_9_texture.png",
-    playerStart = {x = 22, y = 67},
-    platformXMin = 14,
-    platformXMax = 30,
-    bats = {
-        {x = 56, y = 87},
-        {x = 90, y = 87},
-        {x = 40, y = 104},
-        {x = 24, y = 145},
-        {x = 91, y = 145},
-        {x = 55, y = 147},
+    mirrorLines = {
     },
+    airWalls = {
+        {x = 30, y = 36},
+        {x = 30, y = 24},
+    },
+    spawnPlatform = {x = 0, y = 34, width = 24},
 }
 
 return levels

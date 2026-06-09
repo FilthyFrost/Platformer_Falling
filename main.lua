@@ -30,59 +30,50 @@ local PAL = {
     BLOOD_DARK = {0x7a/255, 0x00/255, 0x10/255},  -- dried dark blood
 }
 
--- Sprite data (from HTML reference - Ink Knight & Weeping Moth)
+-- Sprite data (grid aligned)
 local SPRITE_DATA = {
-    -- Player idle frame 1 (9x8)
+    -- Player idle frame 1 (8x7) - larger for visibility
     playerIdle1 = {
-        ".B.....B.",
-        ".BB...BB.",
-        "..BBBBB..",
-        ".BWWWRWB.",
-        ".BWWWWWB.",
-        ".BBBBBBB.",
-        "..B...B..",
-        "..B...B..",
+        ".B....B.",
+        ".BB..BB.",
+        "..BBBB..",
+        ".BWWRWB.",
+        ".BWWWWB.",
+        "..BBBB..",
+        "..B..B..",
     },
-    -- Player idle frame 2 (boil)
+    -- Player idle frame 2 (8x7, boil)
     playerIdle2 = {
-        ".B.....B.",
-        ".BB...BB.",
-        "..BBBBB..",
-        ".BWWWRWB.",
-        ".BWWWWWB.",
-        "..BBBBB..",
-        ".B.....B.",
-        ".B.....B.",
+        "B......B",
+        ".BB..BB.",
+        "..BBBB..",
+        ".BWWRWB.",
+        ".BWWWWB.",
+        "..BBBB..",
+        ".B....B.",
     },
-    -- Player jump
+    -- Player jump (8x7)
     playerJump = {
-        "..B...B..",
-        "..BB.BB..",
-        "...BBB...",
-        "..BWWRB..",
-        ".BWWWWWB.",
-        ".BBBBBBB.",
-        "...B.B...",
-        "...B.B...",
+        "..B..B..",
+        "..BBBB..",
+        "..BWRB..",
+        ".BWWWWB.",
+        ".BBBBBB.",
+        "...BB...",
+        "..B..B..",
     },
-    -- Moth frame A (wings spread, 11x6)
+    -- Moth frame A (wings spread, 6x3)
     mothA = {
-        "BB.......BB",
-        "BWB.....BWB",
-        ".BWB...BWB.",
-        "..BWWWWWB..",
-        "...BWWRB...",
-        "....BBB....",
+        "B.WRW.B",
+        ".BWWWB.",
+        "..BBB..",
     },
-    -- Moth frame B (wings folded, dripping, 11x7)
+    -- Moth frame B (wings folded, 6x4)
     mothB = {
-        "...........",
-        "....BBB....",
-        "...BWWRB...",
-        "..BWWWWWB..",
-        ".BBWBWBWBB.",
-        "B.B.....B.B",
-        ".....R.....",
+        "..BB..",
+        ".BWRB.",
+        ".BWWB.",
+        "B.BB.B",
     },
 }
 
@@ -96,6 +87,7 @@ local STATE = {
     TRANSITION_OUT = "TRANSITION_OUT",
     TRANSITION_IN  = "TRANSITION_IN",
     GAME_CLEAR = "GAME_CLEAR",
+    EDITOR  = "EDITOR",
 }
 
 -- Menu system
@@ -214,6 +206,7 @@ local menuButtons = {
     {text = "\231\187\167\231\187\173\230\184\184\230\136\143", action = "continue", primary = true},   -- 继续游戏
     {text = "\230\150\176\230\184\184\230\136\143", action = "new", primary = false},           -- 新游戏
     {text = "\232\174\190\231\189\174", action = "settings", primary = false},               -- 设置
+    {text = "\229\156\176\229\155\190\231\188\150\232\190\145\229\153\168", action = "editor", primary = false},  -- 地图编辑器
 }
 
 local function drawMenu()
@@ -450,6 +443,11 @@ local actions = { moveLeft = false, moveRight = false, jump = false }
 -- LEVEL DATA
 ------------------------------------------------------------
 local levels = require("levels")
+local Editor = require("editor.editor")
+local MirrorLine = require("mechanics.mirror_line")
+local SpawnPlatform = require("mechanics.spawn_platform")
+local MothMovement = require("mechanics.moth_movement")
+local VoidBat = require("mechanics.void_bat")
 
 ------------------------------------------------------------
 -- CAVE MAP (bitmap collision + stencil)
@@ -546,12 +544,13 @@ local function logicToScreenY(y) return WORLD_H - y end
 local function screenToLogicY(y) return WORLD_H - y end
 
 -- Draw pixel sprite from string array
-local function drawSprite(spriteArray, sx, sy, flipX)
+local function drawSprite(spriteArray, sx, sy, flipX, flipY)
     local h = #spriteArray
     local w = #spriteArray[1]
     for i = 1, h do
+        local rowIdx = flipY and (h - i + 1) or i
         for j = 1, w do
-            local char = spriteArray[i]:sub(j, j)
+            local char = spriteArray[rowIdx]:sub(j, j)
             local color = nil
             if char == 'B' then color = PAL.INK
             elseif char == 'W' then color = PAL.PAPER
@@ -574,18 +573,19 @@ end
 local function createPlayer(sx, sy)
     return {
         x = sx, y = screenToLogicY(sy),
-        w = 9, h = 8,
+        w = 6, h = 6,
         vx = 0, vy = 0,
         squash = 1.0, stretch = 1.0,
         grounded = true,
         facingRight = true,
+        gravityDir = 1,  -- 1 = normal (down), -1 = inverted (up)
     }
 end
 
 local function createMoth(sx, sy)
     return {
         x = sx, y = screenToLogicY(sy),
-        w = 11, h = 7,
+        w = 6, h = 6,
         active = true,
         hoverOffset = math.random() * math.pi * 2,
     }
@@ -686,9 +686,23 @@ function GameLogic.loadLevel(world, n)
     local ld = levels[n]
     if not ld then return end
     world.currentLevel = n
-    world.player = createPlayer(ld.playerStart.x, ld.playerStart.y)
+    -- Load spawn platform
+    SpawnPlatform.load(world, ld)
+    -- Use explicit playerStart if available, otherwise derive from platform
+    local startPos
+    if ld.playerStart then
+        startPos = {x = ld.playerStart.x, y = ld.playerStart.y}
+    else
+        startPos = SpawnPlatform.getPlayerStart(world.spawnPlatform)
+    end
+    world.player = createPlayer(startPos.x, startPos.y)
     world.targets = {}
     for _, b in ipairs(ld.bats) do table.insert(world.targets, createMoth(b.x, b.y)) end
+    MothMovement.applyConfig(world.targets, ld.bats)
+    MirrorLine.load(world, ld)
+    VoidBat.load(world, ld)
+    MothMovement.applyConfig(world.voidBats, ld.voidBats)
+    VoidBat.setMaterializedSprites(SPRITE_DATA.mothA, SPRITE_DATA.mothB)
     world.particles = {}
     world.feathers = {}
     world.ghosts = {}
@@ -789,6 +803,7 @@ function GameLogic.updateRewind(world)
     if record then
         world.player.x = record.x
         world.player.y = record.y
+        world.player.gravityDir = record.gravityDir or 1
         -- Dense ghost trails EVERY frame during rewind
         table.insert(world.ghosts, createGhost(record.x, logicToScreenY(record.y)))
         -- Blood drip particles along the path
@@ -814,7 +829,7 @@ end
 
 function GameLogic.triggerWin(world)
     playSFX("win")
-    if world.currentLevel >= #levels then
+    if world.currentLevel >= #levels or world.currentLevel == 0 then
         world.state = STATE.GAME_CLEAR
         world.flash = 0.4
         world.flashColor = PAL.PAPER
@@ -831,12 +846,15 @@ function GameLogic.checkCollisions(world)
     local p = world.player
     local sx, sy = p.x, logicToScreenY(p.y)
     if not isInsideCave(world.currentLevel, sx, sy) then
-        if p.vy > 0 then
+        -- Direction-aware: "moving against gravity" = safe wall hit, "with gravity" = death
+        local movingAgainstGravity = (p.gravityDir == 1 and p.vy > 0) or
+                                      (p.gravityDir == -1 and p.vy < 0)
+        if movingAgainstGravity then
             p.vy = 0
             for i = 1, 10 do
-                local testY = logicToScreenY(p.y - i)
+                local testY = logicToScreenY(p.y - i * p.gravityDir)
                 if isInsideCave(world.currentLevel, p.x, testY) then
-                    p.y = p.y - i; break
+                    p.y = p.y - i * p.gravityDir; break
                 end
             end
         else
@@ -845,52 +863,58 @@ function GameLogic.checkCollisions(world)
         return
     end
 
-    local allCleared = true
+    -- Base bat collision
+    local allBaseCleared = true
     for _, t in ipairs(world.targets) do
         if not t.active then goto continue end
-        allCleared = false
-        if math.abs(p.x - t.x) < (p.w/2 + t.w/2 + 2) and
-           math.abs(p.y - t.y) < (p.h/2 + t.h/2 + 2) then
-            if p.vy < 0 then
-                p.vy = PHYSICS.BOUNCE_POWER
+        allBaseCleared = false
+        if math.abs(p.x - t.x) < 6 and
+           math.abs(p.y - t.y) < 6 then
+            local isFalling = (p.vy * p.gravityDir < 0)
+            if isFalling then
+                p.vy = PHYSICS.BOUNCE_POWER * p.gravityDir
                 t.active = false
                 playSFX("stomp")
-                -- Gothic impact: hitstop + shake
                 world.shake = 12
                 world.hitstop = 10
                 world.flash = 0.3
                 world.flashColor = PAL.BLOOD
-                -- Blood splatters
                 for i = 1, 25 do
                     table.insert(world.particles, createSplatter(t.x, logicToScreenY(t.y), true))
                 end
-                -- Feathers
                 for i = 1, 12 do
                     table.insert(world.feathers, createFeather(t.x, logicToScreenY(t.y)))
                 end
-                -- Permanent blood decals
                 for i = 1, 15 do
                     table.insert(world.decals, createDecal(t.x, logicToScreenY(t.y), true))
                 end
+                -- Check if void bats should materialize
+                VoidBat.checkMaterialize(world)
+                return  -- hitstop will pause; don't check more this frame
             end
         end
         ::continue::
     end
-    if allCleared and world.state == STATE.PLAYING then GameLogic.triggerWin(world) end
+
+    -- Void bat collision (only materialized ones have collision)
+    VoidBat.checkCollision(world, PHYSICS, PAL, createSplatter, createFeather, createDecal, logicToScreenY, playSFX)
+
+    -- Win condition: all base bats AND all void bats cleared
+    if allBaseCleared and VoidBat.allCleared(world) and world.state == STATE.PLAYING then
+        GameLogic.triggerWin(world)
+    end
 end
 
 function GameLogic.updatePlayerGrounded(world)
     local p = world.player
-    local ld = levels[world.currentLevel]
+    -- Walk left/right on platform (same as original, bounded by platform)
     if actions.moveLeft then p.vx = p.vx - PHYSICS.MOVE_ACCEL; p.facingRight = false end
     if actions.moveRight then p.vx = p.vx + PHYSICS.MOVE_ACCEL; p.facingRight = true end
     p.vx = p.vx * PHYSICS.FRICTION
     if p.vx > PHYSICS.MAX_SPEED_X then p.vx = PHYSICS.MAX_SPEED_X end
     if p.vx < -PHYSICS.MAX_SPEED_X then p.vx = -PHYSICS.MAX_SPEED_X end
-    local newX = p.x + p.vx
-    if newX < ld.platformXMin then newX = ld.platformXMin; p.vx = 0
-    elseif newX > ld.platformXMax then newX = ld.platformXMax; p.vx = 0 end
-    p.x = newX
+    p.x = p.x + p.vx
+    SpawnPlatform.clampX(world)
     p.vy = 0
 end
 
@@ -902,12 +926,21 @@ function GameLogic.updatePlayerAirborne(world)
     if p.vx > PHYSICS.MAX_SPEED_X then p.vx = PHYSICS.MAX_SPEED_X end
     if p.vx < -PHYSICS.MAX_SPEED_X then p.vx = -PHYSICS.MAX_SPEED_X end
     p.x = p.x + p.vx
-    p.vy = p.vy + PHYSICS.GRAVITY
-    if p.vy < -PHYSICS.MAX_FALL_SPEED then p.vy = -PHYSICS.MAX_FALL_SPEED end
+    -- Gravity (direction-aware for mirror line)
+    p.vy = p.vy + PHYSICS.GRAVITY * p.gravityDir
+    -- Terminal velocity (both directions)
+    if p.gravityDir == 1 then
+        if p.vy < -PHYSICS.MAX_FALL_SPEED then p.vy = -PHYSICS.MAX_FALL_SPEED end
+    else
+        if p.vy > PHYSICS.MAX_FALL_SPEED then p.vy = PHYSICS.MAX_FALL_SPEED end
+    end
     p.y = p.y + p.vy
 
-    -- Record position for death rewind
-    table.insert(world.playerHistory, {x = p.x, y = p.y})
+    -- Mirror line crossing detection
+    MirrorLine.checkCrossing(world)
+
+    -- Record position for death rewind (with gravity state)
+    table.insert(world.playerHistory, {x = p.x, y = p.y, gravityDir = p.gravityDir})
 
     -- Ink ghost trails when moving fast
     if (math.abs(p.vx) > 0.8 or math.abs(p.vy) > 0.8) and world.frame % 3 == 0 then
@@ -1049,6 +1082,8 @@ function GameLogic.update(world, dt)
         if s.y > WORLD_H then s.y = 0 end
         if s.x < 0 then s.x = WORLD_W end; if s.x > WORLD_W then s.x = 0 end
     end
+    -- Mirror line animations
+    MirrorLine.update(world, dt)
 
     -- Actions
     if actions.jump then
@@ -1062,6 +1097,8 @@ function GameLogic.update(world, dt)
         GameLogic.updatePlayerGrounded(world)
     elseif world.state == STATE.PLAYING then
         GameLogic.updatePlayer(world)
+        MothMovement.update(world.targets)
+        MothMovement.update(world.voidBats)
         GameLogic.checkCollisions(world)
     end
 end
@@ -1217,7 +1254,8 @@ function GameRender.drawPlayer(world)
 
     -- Boil jitter
     local jitterX = world.boilFrame == 0 and 0 or 1
-    drawSprite(sprite, math.floor(p.x) + jitterX, math.floor(sy), not p.facingRight)
+    local flipY = (p.gravityDir == -1)
+    drawSprite(sprite, math.floor(p.x) + jitterX, math.floor(sy), not p.facingRight, flipY)
 end
 
 function GameRender.drawParticles(world)
@@ -1511,11 +1549,11 @@ local function drawMenuNative(dt)
 
         -- Buttons (STKaiti style, letter-spacing, ink-strike hover)
         MenuSystem.btnBounds = {}
-        local btnTexts = {"\231\187\167\231\187\173\230\184\184\230\136\143", "\230\150\176\230\184\184\230\136\143", "\232\174\190\231\189\174\233\157\162\230\157\191"}
-        local btnStartY = frameY + frameH * 0.38 + offsetY
+        local btnTexts = {"\231\187\167\231\187\173\230\184\184\230\136\143", "\230\150\176\230\184\184\230\136\143", "\232\174\190\231\189\174\233\157\162\230\157\191", "\229\156\176\229\155\190\231\188\150\232\190\145\229\153\168"}
+        local btnStartY = frameY + frameH * 0.35 + offsetY
 
         love.graphics.setFont(menuFontMed)
-        for i = 1, 3 do
+        for i = 1, 4 do
             local by = btnStartY + (i-1) * frameH * 0.07
             local btnW = frameW * 0.6
             local btnH = frameH * 0.05
@@ -1605,6 +1643,10 @@ local function handleMenuClickNative(sx, sy)
                 elseif i == 3 then
                     MenuSystem.showSettings = true
                     MenuSystem.settingsSlideY = 0
+                elseif i == 4 then
+                    -- Open map editor
+                    gameWorld.state = STATE.EDITOR
+                    Editor.enter()
                 end
                 return true
             end
@@ -1661,8 +1703,10 @@ function GameRender.draw(world, dt)
     love.graphics.scale(renderState.scale, renderState.scale)
 
     GameRender.drawCave(world)
+    MirrorLine.draw(world)
     GameRender.drawGhosts(world)
     GameRender.drawMoths(world)
+    VoidBat.draw(world, world.boilFrame, drawSprite, logicToScreenY, world.time)
     GameRender.drawPlayer(world)
     GameRender.drawParticles(world)
     GameRender.drawRewind(world)
@@ -1714,17 +1758,52 @@ function love.load()
 
     initMenuBackground()
     gameWorld = GameLogic.createWorld()
+
+    -- Initialize map editor
+    Editor.init({
+        caveMapData = caveMapData,
+        levels = levels,
+        GameLogic = GameLogic,
+        STATE = STATE,
+        gameWorld = gameWorld,
+    })
 end
 
 function love.resize() GameRender.resize() end
 
 function love.update(dt)
+    -- Editor mode (editing)
+    if gameWorld.state == STATE.EDITOR then
+        Editor.update(dt)
+        return
+    end
+
+    -- Editor play test (game runs normally but editor tracks it)
+    if Editor.isPlayTesting() then
+        actions.moveLeft = love.keyboard.isDown("left") or love.keyboard.isDown("a")
+        actions.moveRight = love.keyboard.isDown("right") or love.keyboard.isDown("d")
+        GameLogic.update(gameWorld, dt)
+        return
+    end
+
     actions.moveLeft = love.keyboard.isDown("left") or love.keyboard.isDown("a")
     actions.moveRight = love.keyboard.isDown("right") or love.keyboard.isDown("d")
     GameLogic.update(gameWorld, dt)
 end
 
 function love.draw()
+    -- Editor mode (editing)
+    if gameWorld.state == STATE.EDITOR then
+        Editor.draw()
+        return
+    end
+
+    -- Editor play test: render game normally
+    if Editor.isPlayTesting() then
+        GameRender.draw(gameWorld, love.timer.getDelta())
+        return
+    end
+
     GameRender.draw(gameWorld, love.timer.getDelta())
 end
 
@@ -1792,6 +1871,43 @@ local function handleMenuClick(screenX, screenY)
 end
 
 function love.keypressed(key)
+    -- F6: toggle editor from anywhere
+    if key == "f6" and gameWorld.state ~= STATE.EDITOR then
+        gameWorld.state = STATE.EDITOR
+        Editor.enter()
+        return
+    end
+
+    -- Editor play test mode: intercept escape/f5 to exit play test
+    if Editor.isPlayTesting() then
+        local handled = Editor.keypressed(key)
+        if handled then return end
+        -- Otherwise pass to game
+        if key == "space" or key == "up" or key == "w" then actions.jump = true end
+        return
+    end
+
+    -- Editor mode input (editing)
+    if gameWorld.state == STATE.EDITOR then
+        -- Editor panel handles generate/level dialogs first
+        local editorState = Editor.getState()
+        if editorState.showGeneratePanel then
+            Editor.handleGeneratePanelKey(key)
+            return
+        end
+        if editorState.showLevelManager then
+            Editor.handleLevelManagerKey(key)
+            return
+        end
+        local result = Editor.keypressed(key)
+        if result == "exit" then
+            -- Exit editor, return to menu
+            Editor.exit()
+            gameWorld.state = STATE.MENU
+        end
+        return
+    end
+
     if key == "escape" then love.event.quit() end
 
     -- Menu: keyboard shortcuts
@@ -1811,6 +1927,34 @@ function love.keypressed(key)
 end
 
 function love.mousepressed(x, y, btn)
+    -- Editor play test: normal game mouse input
+    if Editor.isPlayTesting() then
+        if btn == 1 then
+            if gameWorld.state == STATE.READY or gameWorld.state == STATE.DEAD then
+                actions.jump = true
+            elseif gameWorld.state == STATE.PLAYING then
+                if x < love.graphics.getWidth()/2 then actions.moveLeft = true
+                else actions.moveRight = true end
+            end
+        end
+        return
+    end
+
+    -- Editor mode (editing)
+    if gameWorld.state == STATE.EDITOR then
+        local editorState = Editor.getState()
+        if editorState.showGeneratePanel then
+            Editor.handleGeneratePanelClick(x, y, btn)
+            return
+        end
+        if editorState.showLevelManager then
+            Editor.handleLevelManagerClick(x, y)
+            return
+        end
+        Editor.mousepressed(x, y, btn)
+        return
+    end
+
     if btn == 1 then
         if gameWorld.state == STATE.MENU then
             handleMenuClickNative(x, y)
@@ -1825,6 +1969,12 @@ function love.mousepressed(x, y, btn)
 end
 
 function love.mousemoved(x, y)
+    -- Editor mode (editing)
+    if gameWorld.state == STATE.EDITOR then
+        Editor.mousemoved(x, y, 0, 0)
+        return
+    end
+
     if gameWorld.state == STATE.MENU then
         local prevHover = MenuSystem.hoveredButton
         handleMenuHoverNative(x, y)
@@ -1846,12 +1996,24 @@ function love.mousemoved(x, y)
 end
 
 function love.mousereleased(x, y, btn)
+    -- Editor mode (editing)
+    if gameWorld.state == STATE.EDITOR then
+        Editor.mousereleased(x, y, btn)
+        return
+    end
+
     if btn == 1 then
         menuDragging = nil  -- stop any slider drag
         if gameWorld.state ~= STATE.MENU then
             if x < love.graphics.getWidth()/2 then actions.moveLeft = false
             else actions.moveRight = false end
         end
+    end
+end
+
+function love.wheelmoved(x, y)
+    if gameWorld.state == STATE.EDITOR then
+        Editor.wheelmoved(x, y)
     end
 end
 
