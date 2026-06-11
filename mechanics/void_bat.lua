@@ -11,6 +11,8 @@
 
 local VoidBat = {}
 
+local TransformFX = require("mechanics.transform_fx")
+
 local WORLD_H = 192
 local function screenToLogicY(y) return WORLD_H - y end
 
@@ -47,7 +49,7 @@ function VoidBat.load(world, levelData)
         table.insert(world.voidBats, {
             x = vb.x,
             y = screenToLogicY(vb.y),
-            w = 12, h = 12, -- updated at runtime by PHYSICS
+            w = 7, h = 4, -- sprite size (collision uses PHYSICS constants)
             void = true,      -- true = ethereal (no collision), false = materialized
             active = true,    -- false = killed
             hoverOffset = math.random() * math.pi * 2,
@@ -72,18 +74,40 @@ function VoidBat.checkMaterialize(world)
         end
     end
 
-    if not allBaseCleared then return false end
-
-    -- Check if any void bat is still in void state
-    local materialized = false
-    for _, vb in ipairs(world.voidBats) do
-        if vb.void and vb.active then
-            vb.void = false  -- materialize!
-            materialized = true
+    -- Also check armor bats (they count as base bats for unlock)
+    if allBaseCleared and world.armorBats then
+        for _, ab in ipairs(world.armorBats) do
+            if ab.active then
+                allBaseCleared = false
+                break
+            end
         end
     end
 
-    return materialized
+    -- Also check jump bats (they count as base bats for unlock)
+    if allBaseCleared and world.jumpBats then
+        for _, jb in ipairs(world.jumpBats) do
+            if jb.active then
+                allBaseCleared = false
+                break
+            end
+        end
+    end
+
+    if not allBaseCleared then return false end
+
+    -- Collect void bats that still need to materialize (not already animating)
+    local pending = {}
+    for _, vb in ipairs(world.voidBats) do
+        if vb.void and vb.active and not vb.transforming then
+            table.insert(pending, vb)
+        end
+    end
+    if #pending == 0 then return false end
+
+    -- Staggered materialize animation; vb.void flips to false when each anim ends
+    TransformFX.startVoidMaterialize(world, pending)
+    return true
 end
 
 ------------------------------------------------------------
@@ -108,10 +132,10 @@ function VoidBat.checkCollision(world, PHYSICS, PAL, createSplatter, createFeath
     if not world.voidBats then return false end
 
     for _, vb in ipairs(world.voidBats) do
-        if not vb.active or vb.void then goto continue end
+        if not vb.active or vb.void or vb.transforming then goto continue end
 
-        if math.abs(p.x - vb.x) < (p.w/2 + vb.w/2) and
-           math.abs(p.y - vb.y) < (p.h/2 + vb.h/2) then
+        if math.abs(p.x - vb.x) < (PHYSICS.PLAYER_W/2 + PHYSICS.MOTH_W/2) and
+           math.abs(p.y - vb.y) < (PHYSICS.PLAYER_H/2 + PHYSICS.MOTH_H/2) then
             local isFalling = (p.vy * p.gravityDir < 0)
             if isFalling then
                 p.vy = PHYSICS.BOUNCE_POWER * p.gravityDir
@@ -146,7 +170,7 @@ function VoidBat.draw(world, boilFrame, drawSprite, logicToScreenY, time)
     if not world.voidBats then return end
 
     for _, vb in ipairs(world.voidBats) do
-        if not vb.active then goto continue end
+        if not vb.active or vb.transforming then goto continue end
         local sy = logicToScreenY(vb.y)
         local floatY = math.floor(math.sin(time * 0.005 + vb.hoverOffset) * 3)
 

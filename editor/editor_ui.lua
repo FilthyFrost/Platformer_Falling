@@ -380,8 +380,13 @@ function drawEntityTools(y)
     local btn4W = (fullW - BTN_GAP * 3) / 4
     drawButton(x, y, btn4W, BTN_H, "Moth", state.entitySubMode == "BAT", "entity_bat")
     drawButton(x + (btn4W + BTN_GAP), y, btn4W, BTN_H, "Void", state.entitySubMode == "VOID_BAT", "entity_void_bat")
-    drawButton(x + (btn4W + BTN_GAP) * 2, y, btn4W, BTN_H, "Mirror", state.entitySubMode == "MIRROR_LINE", "entity_mirror")
-    drawButton(x + (btn4W + BTN_GAP) * 3, y, btn4W, BTN_H, "Wall", state.entitySubMode == "AIR_WALL", "entity_airwall")
+    drawButton(x + (btn4W + BTN_GAP) * 2, y, btn4W, BTN_H, "Jump", state.entitySubMode == "JUMP_BAT", "entity_jump_bat")
+    drawButton(x + (btn4W + BTN_GAP) * 3, y, btn4W, BTN_H, "Armor", state.entitySubMode == "ARMOR_BAT", "entity_armor_bat")
+    y = y + BTN_H + BTN_GAP
+    local btn3W = (fullW - BTN_GAP * 2) / 3
+    drawButton(x, y, btn3W, BTN_H, "Mirror", state.entitySubMode == "MIRROR_LINE", "entity_mirror")
+    drawButton(x + (btn3W + BTN_GAP), y, btn3W, BTN_H, "Wall", state.entitySubMode == "AIR_WALL", "entity_airwall")
+    drawButton(x + (btn3W + BTN_GAP) * 2, y, btn3W, BTN_H, "Safe", state.entitySubMode == "SAFE_ZONE", "entity_safe_zone")
     y = y + BTN_H + BTN_GAP + 6
 
     -- Instructions
@@ -434,6 +439,10 @@ function drawEntityTools(y)
         selBat = state.bats[state.selectedEntity.index]
     elseif state.selectedEntity and state.selectedEntity.type == "voidBat" and state.voidBats and state.voidBats[state.selectedEntity.index] then
         selBat = state.voidBats[state.selectedEntity.index]
+    elseif state.selectedEntity and state.selectedEntity.type == "jumpBat" and state.jumpBats and state.jumpBats[state.selectedEntity.index] then
+        selBat = state.jumpBats[state.selectedEntity.index]
+    elseif state.selectedEntity and state.selectedEntity.type == "armorBat" and state.armorBats and state.armorBats[state.selectedEntity.index] then
+        selBat = state.armorBats[state.selectedEntity.index]
     end
 
     if selBat then
@@ -754,6 +763,10 @@ function EditorUI.mousemoved(x, y)
 end
 
 function EditorUI.mousereleased(x, y, button)
+    -- Auto-save physics when done dragging a physics slider
+    if sliderDragging and sliderDragging:sub(1, 5) == "phys_" then
+        EditorRef.exportPhysics()
+    end
     sliderDragging = nil
     EditorUI.panelDragging = false
 end
@@ -766,8 +779,11 @@ function EditorUI.handleButtonClick(id, clickX)
     -- Entity sub-mode
     if id == "entity_bat" then state.entitySubMode = "BAT"; return true end
     if id == "entity_void_bat" then state.entitySubMode = "VOID_BAT"; return true end
+    if id == "entity_jump_bat" then state.entitySubMode = "JUMP_BAT"; return true end
+    if id == "entity_armor_bat" then state.entitySubMode = "ARMOR_BAT"; return true end
     if id == "entity_mirror" then state.entitySubMode = "MIRROR_LINE"; return true end
     if id == "entity_airwall" then state.entitySubMode = "AIR_WALL"; return true end
+    if id == "entity_safe_zone" then state.entitySubMode = "SAFE_ZONE"; return true end
 
     -- Movement property buttons (affect selected bat/voidBat)
     local function getSelectedMoth()
@@ -776,6 +792,10 @@ function EditorUI.handleButtonClick(id, clickX)
             return state.bats[state.selectedEntity.index]
         elseif state.selectedEntity.type == "voidBat" and state.voidBats and state.voidBats[state.selectedEntity.index] then
             return state.voidBats[state.selectedEntity.index]
+        elseif state.selectedEntity.type == "jumpBat" and state.jumpBats and state.jumpBats[state.selectedEntity.index] then
+            return state.jumpBats[state.selectedEntity.index]
+        elseif state.selectedEntity.type == "armorBat" and state.armorBats and state.armorBats[state.selectedEntity.index] then
+            return state.armorBats[state.selectedEntity.index]
         end
         return nil
     end
@@ -870,6 +890,7 @@ function EditorUI.handleButtonClick(id, clickX)
             local sliderW = PANEL_W - PADDING * 2
             local frac = math.max(0, math.min(1, (clickX - sliderX) / sliderW))
             state.physics[key] = p.min + frac * (p.max - p.min)
+            EditorRef.exportPhysics()  -- auto-save
         end
         return true
     end

@@ -1,0 +1,13 @@
+{
+  "gravity": 0.05,
+  "jumpPower": 1.3,
+  "bouncePower": 1.3,
+  "maxFallSpeed": 2.2,
+  "moveAccel": 0.12,
+  "maxSpeedX": 1.2,
+  "friction": 0.86,
+  "playerW": 6,
+  "playerH": 6,
+  "mothW": 5.24,
+  "mothH": 5.24
+}

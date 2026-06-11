@@ -57,9 +57,12 @@ local state = {
     platformXMax = 66,
     bats = {},  -- list of {x=, y=}
     airWalls = {},  -- list of {x=, y=} invisible blockers (12px grid)
+    safeZones = {},  -- list of {x=, y=} safe zones (12px grid, no-death on wall hit)
     voidBats = {},  -- list of {x=, y=}
+    jumpBats = {},  -- list of {x=, y=}
+    armorBats = {},  -- list of {x=, y=}
     mirrorLines = {},  -- list of {x=, y=, length=}
-    entitySubMode = "BAT",  -- "BAT" | "VOID_BAT" | "MIRROR_LINE" | "PLATFORM"
+    entitySubMode = "BAT",  -- "BAT" | "VOID_BAT" | "JUMP_BAT" | "MIRROR_LINE" | "SAFE_ZONE" | "PLATFORM"
 
     -- Entity interaction
     selectedEntity = nil,  -- {type="bat"|"player"|"platform_*"|"mirrorLine_*", index=N}
@@ -154,6 +157,8 @@ function Editor.init(refs)
     EditorUI.init(state, MODE, TOOL)
     -- Scan saved maps
     Editor.scanSavedMaps()
+    -- Auto-load physics params if physics.json exists
+    Editor.importPhysics()
 end
 
 function Editor.enter()
@@ -188,6 +193,9 @@ function Editor.clearCanvas()
     state.bats = {}
     state.mirrorLines = {}
     state.voidBats = {}
+    state.jumpBats = {}
+    state.armorBats = {}
+    state.safeZones = {}
     state.playerStart = {x = 54, y = 60}
     state.platformXMin = 42
     state.platformXMax = 66
@@ -467,6 +475,12 @@ local function findEntityAt(wx, wy)
             return {type = "airWall", index = i}
         end
     end
+    -- Check safe zones (6px radius)
+    for i, sz in ipairs(state.safeZones) do
+        if math.abs(wx - sz.x) < 6 and math.abs(wy - sz.y) < 6 then
+            return {type = "safeZone", index = i}
+        end
+    end
     -- Check bats (3px radius)
     for i, bat in ipairs(state.bats) do
         if math.abs(wx - bat.x) < 3 and math.abs(wy - bat.y) < 3 then
@@ -477,6 +491,18 @@ local function findEntityAt(wx, wy)
     for i, vb in ipairs(state.voidBats) do
         if math.abs(wx - vb.x) < 3 and math.abs(wy - vb.y) < 3 then
             return {type = "voidBat", index = i}
+        end
+    end
+    -- Check jump bats (3px radius)
+    for i, jb in ipairs(state.jumpBats) do
+        if math.abs(wx - jb.x) < 3 and math.abs(wy - jb.y) < 3 then
+            return {type = "jumpBat", index = i}
+        end
+    end
+    -- Check armor bats (3px radius)
+    for i, ab in ipairs(state.armorBats) do
+        if math.abs(wx - ab.x) < 3 and math.abs(wy - ab.y) < 3 then
+            return {type = "armorBat", index = i}
         end
     end
     -- Check mirror lines (4px vertical tolerance, endpoint handles 6px)
@@ -542,7 +568,10 @@ function Editor.saveMap(name)
         platformXMax = state.platformXMax,
         bats = state.bats,
         airWalls = state.airWalls,
+        safeZones = state.safeZones,
         voidBats = state.voidBats,
+        jumpBats = state.jumpBats,
+        armorBats = state.armorBats,
         mirrorLines = state.mirrorLines,
     }
     local jsonStr = json.encodePretty(meta)
@@ -579,8 +608,11 @@ function Editor.loadMap(name)
             if meta.platformXMax then state.platformXMax = meta.platformXMax end
             if meta.bats then state.bats = meta.bats end
             if meta.airWalls then state.airWalls = meta.airWalls end
+            if meta.safeZones then state.safeZones = meta.safeZones end
             if meta.mirrorLines then state.mirrorLines = meta.mirrorLines end
             if meta.voidBats then state.voidBats = meta.voidBats end
+            if meta.jumpBats then state.jumpBats = meta.jumpBats end
+            if meta.armorBats then state.armorBats = meta.armorBats end
         end
     end
 
@@ -792,7 +824,12 @@ function Editor.exportToGame()
             platformXMin = platMin,
             platformXMax = platMax,
             bats = meta.bats or {},
+            voidBats = meta.voidBats or {},
+            jumpBats = meta.jumpBats or {},
+            armorBats = meta.armorBats or {},
             mirrorLines = meta.mirrorLines or {},
+            safeZones = meta.safeZones or {},
+            airWalls = meta.airWalls or {},
         })
     end
 
@@ -810,9 +847,30 @@ function Editor.exportToGame()
         table.insert(lines, '    platformXMax = ' .. entry.platformXMax .. ',')
         table.insert(lines, '    bats = {')
         for _, bat in ipairs(entry.bats) do
-            table.insert(lines, '        {x = ' .. bat.x .. ', y = ' .. bat.y .. '},')
+            table.insert(lines, string.format('        {x = %d, y = %d, moveDir = "%s", moveDist = %d, moveSpeed = %.2f},', bat.x, bat.y, bat.moveDir or "NONE", bat.moveDist or 24, bat.moveSpeed or 0.6))
         end
         table.insert(lines, '    },')
+        if #entry.voidBats > 0 then
+            table.insert(lines, '    voidBats = {')
+            for _, vb in ipairs(entry.voidBats) do
+                table.insert(lines, string.format('        {x = %d, y = %d, moveDir = "%s", moveDist = %d, moveSpeed = %.2f},', vb.x, vb.y, vb.moveDir or "NONE", vb.moveDist or 24, vb.moveSpeed or 0.6))
+            end
+            table.insert(lines, '    },')
+        end
+        if #entry.jumpBats > 0 then
+            table.insert(lines, '    jumpBats = {')
+            for _, jb in ipairs(entry.jumpBats) do
+                table.insert(lines, string.format('        {x = %d, y = %d, moveDir = "%s", moveDist = %d, moveSpeed = %.2f},', jb.x, jb.y, jb.moveDir or "NONE", jb.moveDist or 24, jb.moveSpeed or 0.6))
+            end
+            table.insert(lines, '    },')
+        end
+        if #entry.armorBats > 0 then
+            table.insert(lines, '    armorBats = {')
+            for _, ab in ipairs(entry.armorBats) do
+                table.insert(lines, string.format('        {x = %d, y = %d, moveDir = "%s", moveDist = %d, moveSpeed = %.2f},', ab.x, ab.y, ab.moveDir or "NONE", ab.moveDist or 24, ab.moveSpeed or 0.6))
+            end
+            table.insert(lines, '    },')
+        end
         if #entry.mirrorLines > 0 then
             table.insert(lines, '    mirrorLines = {')
             for _, ml in ipairs(entry.mirrorLines) do
@@ -881,8 +939,11 @@ function Editor.startPlayTest()
         },
         bats = {},
         voidBats = {},
+        jumpBats = {},
+        armorBats = {},
         mirrorLines = {},
         airWalls = {},
+        safeZones = {},
     }
     for _, bat in ipairs(state.bats) do
         table.insert(refs.levels[0].bats, {x = bat.x, y = bat.y, moveDir = bat.moveDir, moveDist = bat.moveDist, moveSpeed = bat.moveSpeed, moveStartDir = bat.moveStartDir or 1})
@@ -890,8 +951,17 @@ function Editor.startPlayTest()
     for _, aw in ipairs(state.airWalls) do
         table.insert(refs.levels[0].airWalls, {x = aw.x, y = aw.y})
     end
+    for _, sz in ipairs(state.safeZones) do
+        table.insert(refs.levels[0].safeZones, {x = sz.x, y = sz.y})
+    end
     for _, vb in ipairs(state.voidBats) do
         table.insert(refs.levels[0].voidBats, {x = vb.x, y = vb.y, moveDir = vb.moveDir, moveDist = vb.moveDist, moveSpeed = vb.moveSpeed, moveStartDir = vb.moveStartDir or 1})
+    end
+    for _, jb in ipairs(state.jumpBats) do
+        table.insert(refs.levels[0].jumpBats, {x = jb.x, y = jb.y, moveDir = jb.moveDir, moveDist = jb.moveDist, moveSpeed = jb.moveSpeed, moveStartDir = jb.moveStartDir or 1})
+    end
+    for _, ab in ipairs(state.armorBats) do
+        table.insert(refs.levels[0].armorBats, {x = ab.x, y = ab.y, moveDir = ab.moveDir, moveDist = ab.moveDist, moveSpeed = ab.moveSpeed, moveStartDir = ab.moveStartDir or 1})
     end
     for _, ml in ipairs(state.mirrorLines) do
         table.insert(refs.levels[0].mirrorLines, {x = ml.x, y = ml.y, length = ml.length})
@@ -1182,6 +1252,9 @@ function Editor.mousepressed(x, y, button)
                 if entity.type == "airWall" then
                     state.dragOffset.x = state.airWalls[entity.index].x - wx
                     state.dragOffset.y = state.airWalls[entity.index].y - wy
+                elseif entity.type == "safeZone" then
+                    state.dragOffset.x = state.safeZones[entity.index].x - wx
+                    state.dragOffset.y = state.safeZones[entity.index].y - wy
                 elseif entity.type == "bat" then
                     state.dragOffset.x = state.bats[entity.index].x - wx
                     state.dragOffset.y = state.bats[entity.index].y - wy
@@ -1199,18 +1272,27 @@ function Editor.mousepressed(x, y, button)
             else
                 -- Place new entity based on sub-mode
                 if state.entitySubMode == "MIRROR_LINE" then
-                    local snapX = math.floor(wx / 8) * 8
-                    local snapY = math.floor(wy / 8) * 8
+                    local snapX = math.floor(wx / 6 + 0.5) * 6
+                    local snapY = math.floor(wy / 6 + 0.5) * 6
                     table.insert(state.mirrorLines, {x = snapX, y = snapY, length = 32})
                     state.dirty = true
                 elseif state.entitySubMode == "AIR_WALL" then
                     table.insert(state.airWalls, {x = math.floor(wx / 6 + 0.5) * 6, y = math.floor(wy / 6 + 0.5) * 6})
                     state.dirty = true
+                elseif state.entitySubMode == "SAFE_ZONE" then
+                    table.insert(state.safeZones, {x = math.floor(wx / 6 + 0.5) * 6, y = math.floor(wy / 6 + 0.5) * 6})
+                    state.dirty = true
                 elseif state.entitySubMode == "BAT" then
                     table.insert(state.bats, {x = math.floor(wx / 6 + 0.5) * 6, y = math.floor(wy / 6 + 0.5) * 6, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6, moveStartDir = 1})
                     state.dirty = true
                 elseif state.entitySubMode == "VOID_BAT" then
-                    table.insert(state.voidBats, {x = wx, y = wy})
+                    table.insert(state.voidBats, {x = math.floor(wx / 6 + 0.5) * 6, y = math.floor(wy / 6 + 0.5) * 6, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6, moveStartDir = 1})
+                    state.dirty = true
+                elseif state.entitySubMode == "JUMP_BAT" then
+                    table.insert(state.jumpBats, {x = math.floor(wx / 6 + 0.5) * 6, y = math.floor(wy / 6 + 0.5) * 6, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6, moveStartDir = 1})
+                    state.dirty = true
+                elseif state.entitySubMode == "ARMOR_BAT" then
+                    table.insert(state.armorBats, {x = math.floor(wx / 6 + 0.5) * 6, y = math.floor(wy / 6 + 0.5) * 6, moveDir = "NONE", moveDist = 24, moveSpeed = 0.6, moveStartDir = 1})
                     state.dirty = true
                 end
                 -- PLATFORM: always exists, can't place new ones, just drag existing
@@ -1221,11 +1303,20 @@ function Editor.mousepressed(x, y, button)
             if entity and entity.type == "airWall" then
                 table.remove(state.airWalls, entity.index)
                 state.dirty = true
+            elseif entity and entity.type == "safeZone" then
+                table.remove(state.safeZones, entity.index)
+                state.dirty = true
             elseif entity and entity.type == "bat" then
                 table.remove(state.bats, entity.index)
                 state.dirty = true
             elseif entity and entity.type == "voidBat" then
                 table.remove(state.voidBats, entity.index)
+                state.dirty = true
+            elseif entity and entity.type == "jumpBat" then
+                table.remove(state.jumpBats, entity.index)
+                state.dirty = true
+            elseif entity and entity.type == "armorBat" then
+                table.remove(state.armorBats, entity.index)
                 state.dirty = true
             elseif entity and (entity.type == "mirrorLine_body" or
                               entity.type == "mirrorLine_left" or
@@ -1296,6 +1387,11 @@ function Editor.mousemoved(x, y, dx, dy)
             local rawY = wy + state.dragOffset.y
             state.airWalls[ent.index].x = math.floor(rawX / 6 + 0.5) * 6
             state.airWalls[ent.index].y = math.floor(rawY / 6 + 0.5) * 6
+        elseif ent.type == "safeZone" and state.safeZones[ent.index] then
+            local rawX = wx + state.dragOffset.x
+            local rawY = wy + state.dragOffset.y
+            state.safeZones[ent.index].x = math.floor(rawX / 6 + 0.5) * 6
+            state.safeZones[ent.index].y = math.floor(rawY / 6 + 0.5) * 6
         elseif ent.type == "bat" and state.bats[ent.index] then
             local rawX = wx + state.dragOffset.x
             local rawY = wy + state.dragOffset.y
@@ -1304,6 +1400,16 @@ function Editor.mousemoved(x, y, dx, dy)
         elseif ent.type == "voidBat" and state.voidBats and state.voidBats[ent.index] then
             state.voidBats[ent.index].x = wx + state.dragOffset.x
             state.voidBats[ent.index].y = wy + state.dragOffset.y
+        elseif ent.type == "jumpBat" and state.jumpBats and state.jumpBats[ent.index] then
+            local rawX = wx + state.dragOffset.x
+            local rawY = wy + state.dragOffset.y
+            state.jumpBats[ent.index].x = math.floor(rawX / 6 + 0.5) * 6
+            state.jumpBats[ent.index].y = math.floor(rawY / 6 + 0.5) * 6
+        elseif ent.type == "armorBat" and state.armorBats and state.armorBats[ent.index] then
+            local rawX = wx + state.dragOffset.x
+            local rawY = wy + state.dragOffset.y
+            state.armorBats[ent.index].x = math.floor(rawX / 6 + 0.5) * 6
+            state.armorBats[ent.index].y = math.floor(rawY / 6 + 0.5) * 6
         elseif ent.type == "player" then
             local rawX = wx + state.dragOffset.x
             local rawY = wy + state.dragOffset.y
@@ -1312,25 +1418,25 @@ function Editor.mousemoved(x, y, dx, dy)
         elseif ent.type == "mirrorLine_body" then
             local ml = state.mirrorLines[ent.index]
             if ml then
-                ml.x = math.floor((wx + state.dragOffset.x) / 8) * 8
-                ml.y = math.floor((wy + state.dragOffset.y) / 8) * 8
+                ml.x = math.floor((wx + state.dragOffset.x) / 6 + 0.5) * 6
+                ml.y = math.floor((wy + state.dragOffset.y) / 6 + 0.5) * 6
                 ml.x = math.max(0, math.min(WORLD_W - ml.length, ml.x))
                 ml.y = math.max(0, math.min(WORLD_H - 1, ml.y))
             end
         elseif ent.type == "mirrorLine_left" then
             local ml = state.mirrorLines[ent.index]
             if ml then
-                local newX = math.floor(wx / 8) * 8
+                local newX = math.floor(wx / 6 + 0.5) * 6
                 local rightEnd = ml.x + ml.length
-                newX = math.max(0, math.min(rightEnd - 16, newX))
+                newX = math.max(0, math.min(rightEnd - 12, newX))
                 ml.length = rightEnd - newX
                 ml.x = newX
             end
         elseif ent.type == "mirrorLine_right" then
             local ml = state.mirrorLines[ent.index]
             if ml then
-                local newRight = math.floor(wx / 8) * 8
-                newRight = math.max(ml.x + 16, math.min(WORLD_W, newRight))
+                local newRight = math.floor(wx / 6 + 0.5) * 6
+                newRight = math.max(ml.x + 12, math.min(WORLD_W, newRight))
                 ml.length = newRight - ml.x
             end
         end
@@ -1598,6 +1704,22 @@ function Editor.drawEntities()
         love.graphics.line(awx + 4 * scale, awy - 4 * scale, awx - 4 * scale, awy + 4 * scale)
     end
 
+    -- Safe Zones (green semi-transparent block)
+    for i, sz in ipairs(state.safeZones) do
+        local szx, szy = worldToScreen(sz.x, sz.y)
+        local isSel = state.selectedEntity and state.selectedEntity.type == "safeZone"
+                        and state.selectedEntity.index == i
+        if isSel then
+            love.graphics.setColor(1, 1, 0, 0.4)
+        else
+            love.graphics.setColor(0.2, 0.9, 0.3, 0.25)
+        end
+        love.graphics.rectangle("fill", szx - 6 * scale, szy - 6 * scale, 12 * scale, 12 * scale)
+        love.graphics.setColor(0.2, 0.9, 0.3, 0.7)
+        love.graphics.setLineWidth(1)
+        love.graphics.rectangle("line", szx - 6 * scale, szy - 6 * scale, 12 * scale, 12 * scale)
+    end
+
     -- Bats: marker + COLLISION BODY (13x9 effective)
     for i, bat in ipairs(state.bats) do
         local bx = ox + bat.x * scale
@@ -1658,6 +1780,25 @@ function Editor.drawEntities()
         local vy = oy + vb.y * scale
         local isSel = state.selectedEntity and state.selectedEntity.type == "voidBat"
                         and state.selectedEntity.index == i
+        -- Movement trajectory line
+        if vb.moveDir and vb.moveDir ~= "NONE" and vb.moveDist then
+            love.graphics.setColor(1, 0.8, 0, 0.5)
+            love.graphics.setLineWidth(1)
+            local halfDist = vb.moveDist / 2
+            if vb.moveDir == "HORIZONTAL" then
+                local lx = ox + (vb.x - halfDist) * scale
+                local rx = ox + (vb.x + halfDist) * scale
+                love.graphics.line(lx, vy, rx, vy)
+                love.graphics.circle("fill", lx, vy, 2)
+                love.graphics.circle("fill", rx, vy, 2)
+            elseif vb.moveDir == "VERTICAL" then
+                local ty = oy + (vb.y - halfDist) * scale
+                local dy = oy + (vb.y + halfDist) * scale
+                love.graphics.line(vx, ty, vx, dy)
+                love.graphics.circle("fill", vx, ty, 2)
+                love.graphics.circle("fill", vx, dy, 2)
+            end
+        end
         if isSel then
             love.graphics.setColor(1, 1, 0, 0.9)
         else
@@ -1667,6 +1808,94 @@ function Editor.drawEntities()
         love.graphics.circle("line", vx, vy, 3)
         love.graphics.setColor(0.5, 0.4, 0.7, 0.4)
         love.graphics.circle("fill", vx, vy, 3)
+    end
+
+    -- Armor Bats (dark/brown circles with shield icon)
+    for i, ab in ipairs(state.armorBats) do
+        local ax = ox + ab.x * scale
+        local ay = oy + ab.y * scale
+        local isSel = state.selectedEntity and state.selectedEntity.type == "armorBat"
+                        and state.selectedEntity.index == i
+        -- Movement trajectory line
+        if ab.moveDir and ab.moveDir ~= "NONE" and ab.moveDist then
+            love.graphics.setColor(1, 0.8, 0, 0.5)
+            love.graphics.setLineWidth(1)
+            local halfDist = ab.moveDist / 2
+            if ab.moveDir == "HORIZONTAL" then
+                local lx = ox + (ab.x - halfDist) * scale
+                local rx = ox + (ab.x + halfDist) * scale
+                love.graphics.line(lx, ay, rx, ay)
+                love.graphics.circle("fill", lx, ay, 2)
+                love.graphics.circle("fill", rx, ay, 2)
+            elseif ab.moveDir == "VERTICAL" then
+                local ty = oy + (ab.y - halfDist) * scale
+                local dy = oy + (ab.y + halfDist) * scale
+                love.graphics.line(ax, ty, ax, dy)
+                love.graphics.circle("fill", ax, ty, 2)
+                love.graphics.circle("fill", ax, dy, 2)
+            end
+        end
+        -- Collision hitbox
+        if state.showHitboxes then
+            local bw, bh = state.physics.mothW, state.physics.mothH
+            local hbx = ox + (ab.x - bw/2) * scale
+            local hby = oy + (ab.y - bh/2) * scale
+            if isSel then
+                love.graphics.setColor(1, 1, 0, 0.25)
+            else
+                love.graphics.setColor(0.5, 0.5, 0.5, 0.2)
+            end
+            love.graphics.rectangle("fill", hbx, hby, bw * scale, bh * scale)
+            love.graphics.setColor(0.5, 0.5, 0.5, 0.6)
+            love.graphics.setLineWidth(1)
+            love.graphics.rectangle("line", hbx, hby, bw * scale, bh * scale)
+        end
+        -- Center marker (gray for iron armor)
+        if isSel then
+            love.graphics.setColor(1, 1, 0, 0.9)
+        else
+            love.graphics.setColor(0.55, 0.55, 0.52, 0.9)
+        end
+        love.graphics.circle("fill", ax, ay, 4)
+        love.graphics.setColor(0.3, 0.3, 0.28, 0.9)
+        love.graphics.circle("line", ax, ay, 4)
+        -- Shield indicator (horizontal line)
+        love.graphics.line(ax - 3, ay, ax + 3, ay)
+    end
+
+    -- Jump Bats (red/orange circles)
+    for i, jb in ipairs(state.jumpBats) do
+        local jx = ox + jb.x * scale
+        local jy = oy + jb.y * scale
+        local isSel = state.selectedEntity and state.selectedEntity.type == "jumpBat"
+                        and state.selectedEntity.index == i
+        -- Movement trajectory line
+        if jb.moveDir and jb.moveDir ~= "NONE" and jb.moveDist then
+            love.graphics.setColor(1, 0.8, 0, 0.5)
+            love.graphics.setLineWidth(1)
+            local halfDist = jb.moveDist / 2
+            if jb.moveDir == "HORIZONTAL" then
+                local lx = ox + (jb.x - halfDist) * scale
+                local rx = ox + (jb.x + halfDist) * scale
+                love.graphics.line(lx, jy, rx, jy)
+                love.graphics.circle("fill", lx, jy, 2)
+                love.graphics.circle("fill", rx, jy, 2)
+            elseif jb.moveDir == "VERTICAL" then
+                local ty = oy + (jb.y - halfDist) * scale
+                local dy = oy + (jb.y + halfDist) * scale
+                love.graphics.line(jx, ty, jx, dy)
+                love.graphics.circle("fill", jx, ty, 2)
+                love.graphics.circle("fill", jx, dy, 2)
+            end
+        end
+        if isSel then
+            love.graphics.setColor(1, 1, 0, 0.9)
+        else
+            love.graphics.setColor(0.9, 0.2, 0.1, 0.8)
+        end
+        love.graphics.circle("fill", jx, jy, 4)
+        love.graphics.setColor(1, 0.4, 0.2, 0.9)
+        love.graphics.circle("line", jx, jy, 5)
     end
 
     -- Mirror lines (green horizontal lines with endpoint handles)

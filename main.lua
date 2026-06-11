@@ -90,7 +90,8 @@ local STATE = {
     REWINDING = "REWINDING",
     TRANSITION_OUT = "TRANSITION_OUT",
     TRANSITION_IN  = "TRANSITION_IN",
-    GAME_CLEAR = "GAME_CLEAR",
+    LEVEL_SELECT = "LEVEL_SELECT",
+    VICTORY = "VICTORY",
     EDITOR  = "EDITOR",
 }
 
@@ -452,6 +453,17 @@ local MirrorLine = require("mechanics.mirror_line")
 local SpawnPlatform = require("mechanics.spawn_platform")
 local MothMovement = require("mechanics.moth_movement")
 local VoidBat = require("mechanics.void_bat")
+local JumpBat = require("mechanics.jump_bat")
+local SafeZone = require("mechanics.safe_zone")
+local ArmorBat = require("mechanics.armor_bat")
+local TransformFX = require("mechanics.transform_fx")
+local Sketch = require("ui.sketch")
+local SaveData = require("ui.save_data")
+local RunTimer = SaveData.RunTimer
+local SfxSynth = require("ui.sfx_synth")
+local PauseUI = require("ui.pause_ui")
+local LevelSelect = require("ui.level_select")
+local Victory = require("ui.victory")
 
 ------------------------------------------------------------
 -- CAVE MAP (bitmap collision + stencil)
@@ -647,9 +659,11 @@ end
 ------------------------------------------------------------
 local SFX = {}
 local function playSFX(name)
-    if SFX[name] then
-        SFX[name]:stop()
-        SFX[name]:play()
+    local s = SFX[name]
+    if s then
+        s:stop()
+        s:setVolume((SaveData.data.volume or 80) / 100)
+        s:play()
     end
 end
 
@@ -701,12 +715,17 @@ function GameLogic.loadLevel(world, n)
     end
     world.player = createPlayer(startPos.x, startPos.y)
     world.targets = {}
-    for _, b in ipairs(ld.bats) do table.insert(world.targets, createMoth(b.x, b.y)) end
-    MothMovement.applyConfig(world.targets, ld.bats)
+    for _, b in ipairs(ld.bats or {}) do table.insert(world.targets, createMoth(b.x, b.y)) end
+    MothMovement.applyConfig(world.targets, ld.bats or {})
     MirrorLine.load(world, ld)
     VoidBat.load(world, ld)
-    MothMovement.applyConfig(world.voidBats, ld.voidBats)
+    MothMovement.applyConfig(world.voidBats, ld.voidBats or {})
     VoidBat.setMaterializedSprites(SPRITE_DATA.mothA, SPRITE_DATA.mothB)
+    JumpBat.load(world, ld)
+    MothMovement.applyConfig(world.jumpBats, ld.jumpBats or {})
+    ArmorBat.load(world, ld)
+    MothMovement.applyConfig(world.armorBats, ld.armorBats or {})
+    SafeZone.load(world, ld)
     world.particles = {}
     world.feathers = {}
     world.ghosts = {}
@@ -723,6 +742,7 @@ function GameLogic.loadLevel(world, n)
     world.shake = 0
     world.flash = 0
     world.hitstop = 0
+    TransformFX.reset()
     -- Pre-compute thorns for this level
     computeThorns(n)
 end
@@ -734,7 +754,6 @@ end
 
 function GameLogic.startJump(world)
     if world.state == STATE.DEAD then GameLogic.resetLevel(world); return end
-    if world.state == STATE.GAME_CLEAR then return end
     if world.state ~= STATE.READY then return end
     world.state = STATE.PLAYING
     playSFX("jump")
@@ -832,12 +851,16 @@ function GameLogic.updateRewind(world)
 end
 
 function GameLogic.triggerWin(world)
-    playSFX("win")
+    if world.currentLevel >= 1 then
+        SaveData.markCleared(world.currentLevel)
+    end
     if world.currentLevel >= #levels or world.currentLevel == 0 then
-        world.state = STATE.GAME_CLEAR
         world.flash = 0.4
         world.flashColor = PAL.PAPER
+        world.state = STATE.VICTORY
+        Victory.enter()
     else
+        playSFX("win")
         playSFX("transition")
         world.state = STATE.TRANSITION_OUT
         world.transition.timer = 0
@@ -854,11 +877,21 @@ function GameLogic.checkCollisions(world)
         local movingAgainstGravity = (p.gravityDir == 1 and p.vy > 0) or
                                       (p.gravityDir == -1 and p.vy < 0)
         if movingAgainstGravity then
+            -- Hit ceiling/wall while jumping: push back
             p.vy = 0
             for i = 1, 10 do
                 local testY = logicToScreenY(p.y - i * p.gravityDir)
                 if isInsideCave(world.currentLevel, p.x, testY) then
                     p.y = p.y - i * p.gravityDir; break
+                end
+            end
+        elseif SafeZone.isPlayerSafe(world) then
+            -- In safe zone: push back instead of dying (same as hitting ceiling)
+            p.vy = 0
+            for i = 1, 10 do
+                local testY = logicToScreenY(p.y + i * p.gravityDir)
+                if isInsideCave(world.currentLevel, p.x, testY) then
+                    p.y = p.y + i * p.gravityDir; break
                 end
             end
         else
@@ -892,19 +925,26 @@ function GameLogic.checkCollisions(world)
                 for i = 1, 15 do
                     table.insert(world.decals, createDecal(t.x, logicToScreenY(t.y), true))
                 end
-                -- Check if void bats should materialize
-                VoidBat.checkMaterialize(world)
                 return  -- hitstop will pause; don't check more this frame
             end
         end
         ::continue::
     end
 
+    -- Armor bat collision (2 hits to kill, counts as base bat for void unlock)
+    ArmorBat.checkCollision(world, PHYSICS, PAL, createSplatter, createFeather, createDecal, logicToScreenY, playSFX)
+
     -- Void bat collision (only materialized ones have collision)
     VoidBat.checkCollision(world, PHYSICS, PAL, createSplatter, createFeather, createDecal, logicToScreenY, playSFX)
 
-    -- Win condition: all base bats AND all void bats cleared
-    if allBaseCleared and VoidBat.allCleared(world) and world.state == STATE.PLAYING then
+    -- Jump bat collision (2x bounce)
+    JumpBat.checkCollision(world, PHYSICS, PAL, createSplatter, createFeather, createDecal, logicToScreenY, playSFX)
+
+    -- Unified void bat materialization check (after all collisions processed)
+    VoidBat.checkMaterialize(world)
+
+    -- Win condition: all base + armor + void + jump bats cleared
+    if allBaseCleared and ArmorBat.allCleared(world) and VoidBat.allCleared(world) and JumpBat.allCleared(world) and world.state == STATE.PLAYING then
         GameLogic.triggerWin(world)
     end
 end
@@ -1003,10 +1043,29 @@ function GameLogic.update(world, dt)
             menuHumorAlpha = 0
             menuIsFalling = false
             MenuSystem.menuOffsetY = 0
+            RunTimer.startRun(world.currentLevel == 1)
             world.state = STATE.READY
         end
         return
     end
+
+    -- Level select / victory screens (self-animating; only decay shake/flash)
+    if world.state == STATE.LEVEL_SELECT or world.state == STATE.VICTORY then
+        if world.shake > 0 then world.shake = world.shake * 0.82 end
+        if world.shake < 0.5 then world.shake = 0 end
+        if world.flash > 0 then world.flash = world.flash - 0.03 end
+        return
+    end
+
+    -- Pause: freeze gameplay (timer also paused); shake still decays for previewShake
+    if PauseUI.open then
+        if world.shake > 0 then world.shake = world.shake * 0.82 end
+        if world.shake < 0.5 then world.shake = 0 end
+        return
+    end
+
+    -- Speedrun wall clock (ticks through death/rewind/transition, not pause)
+    RunTimer.update(dt)
 
     -- Hitstop: freeze everything
     if world.hitstop > 0 then
@@ -1056,6 +1115,9 @@ function GameLogic.update(world, dt)
     if world.shake < 0.5 then world.shake = 0 end
     if world.flash > 0 then world.flash = world.flash - 0.03 end
 
+    -- Bat transformation animations (armor break / void materialize)
+    TransformFX.update(world, dt)
+
     -- Update particles
     for i = #world.particles, 1, -1 do
         local p = world.particles[i]
@@ -1088,6 +1150,7 @@ function GameLogic.update(world, dt)
     end
     -- Mirror line animations
     MirrorLine.update(world, dt)
+    ArmorBat.update(world, dt)
 
     -- Actions
     if actions.jump then
@@ -1100,6 +1163,8 @@ function GameLogic.update(world, dt)
     -- Moths always move (so player can observe patterns before jumping)
     MothMovement.update(world.targets)
     MothMovement.update(world.voidBats)
+    MothMovement.update(world.jumpBats)
+    MothMovement.update(world.armorBats)
 
     if world.state == STATE.READY then
         GameLogic.updatePlayerGrounded(world)
@@ -1612,6 +1677,7 @@ end
 -- Native resolution menu click handler (uses screen pixel coords directly)
 local function handleMenuClickNative(sx, sy)
     if gameWorld.state ~= STATE.MENU then return false end
+    if PauseUI.menuSettingsOpen then return false end  -- clicks handled by Sketch
 
     if MenuSystem.showSettings then
         -- Check volume bar
@@ -1644,11 +1710,18 @@ local function handleMenuClickNative(sx, sy)
         for i, bounds in ipairs(MenuSystem.btnBounds) do
             if sx >= bounds.x and sx <= bounds.x + bounds.w and
                sy >= bounds.y and sy <= bounds.y + bounds.h then
-                if i == 1 or i == 2 then
+                if i == 1 then
+                    -- 继续游戏: open hand-drawn level selector
+                    playSFX("page")
+                    LevelSelect.enter()
+                    gameWorld.state = STATE.LEVEL_SELECT
+                elseif i == 2 then
+                    -- 新游戏: start from level 1 (keeps unlocks, fullRun timer)
+                    GameLogic.loadLevel(gameWorld, 1)
                     startMenuTransition()
                 elseif i == 3 then
-                    MenuSystem.showSettings = true
-                    MenuSystem.settingsSlideY = 0
+                    playSFX("page")
+                    PauseUI.menuSettingsOpen = true
                 elseif i == 4 then
                     -- Open map editor
                     gameWorld.state = STATE.EDITOR
@@ -1687,6 +1760,32 @@ function GameRender.draw(world, dt)
     -- Menu states: render at NATIVE screen resolution (no pixel scaling)
     if world.state == STATE.MENU or world.state == STATE.MENU_TRANSITION then
         drawMenuNative(dt)
+        Sketch.beginFrame(renderState.offsetX, renderState.offsetY, renderState.scale)
+        if PauseUI.menuSettingsOpen then
+            PauseUI.drawSettingsPanel(true)
+        end
+        return
+    end
+
+    -- Hand-drawn full-screen UI states (level select / victory)
+    if world.state == STATE.LEVEL_SELECT or world.state == STATE.VICTORY then
+        love.graphics.clear(0.02, 0.02, 0.02)
+        Sketch.beginFrame(renderState.offsetX, renderState.offsetY, renderState.scale)
+        local shakeOn = (SaveData.data.shake or 2) > 0
+        local mag = world.shake * ((SaveData.data.shake == 1) and 0.4 or 1)
+        local shook = shakeOn and mag > 0
+        if shook then
+            love.graphics.push()
+            love.graphics.translate(
+                (math.random() - 0.5) * mag * 0.15 * renderState.scale,
+                (math.random() - 0.5) * mag * 0.15 * renderState.scale)
+        end
+        if world.state == STATE.LEVEL_SELECT then
+            LevelSelect.draw(dt)
+        else
+            Victory.draw(dt)
+        end
+        if shook then love.graphics.pop() end
         return
     end
 
@@ -1698,11 +1797,12 @@ function GameRender.draw(world, dt)
     love.graphics.clear(PAL.INK)
     love.graphics.push()
 
-    -- Screen shake (integer pixels)
-    if world.shake > 0 then
+    -- Screen shake (integer pixels, respects settings)
+    if world.shake > 0 and (SaveData.data.shake or 2) > 0 then
+        local shakeFactor = (SaveData.data.shake == 1) and 0.4 or 1
         love.graphics.translate(
-            math.floor((math.random()-0.5) * world.shake) * renderState.scale,
-            math.floor((math.random()-0.5) * world.shake) * renderState.scale)
+            math.floor((math.random()-0.5) * world.shake * shakeFactor) * renderState.scale,
+            math.floor((math.random()-0.5) * world.shake * shakeFactor) * renderState.scale)
     end
 
     love.graphics.translate(renderState.offsetX, renderState.offsetY)
@@ -1713,6 +1813,9 @@ function GameRender.draw(world, dt)
     GameRender.drawGhosts(world)
     GameRender.drawMoths(world)
     VoidBat.draw(world, world.boilFrame, drawSprite, logicToScreenY, world.time)
+    JumpBat.draw(world, world.boilFrame, drawSprite, logicToScreenY, world.time)
+    ArmorBat.draw(world, world.boilFrame, drawSprite, logicToScreenY, world.time, SPRITE_DATA.mothA, SPRITE_DATA.mothB)
+    TransformFX.drawBats(world)
     GameRender.drawPlayer(world)
     GameRender.drawParticles(world)
     GameRender.drawRewind(world)
@@ -1721,6 +1824,15 @@ function GameRender.draw(world, dt)
 
     love.graphics.pop()
     GameRender.drawUI(world, dt)
+
+    -- Native-resolution hand-drawn UI layer
+    Sketch.beginFrame(renderState.offsetX, renderState.offsetY, renderState.scale)
+    if not Editor.isPlayTesting() then
+        if world.state == STATE.READY or world.state == STATE.PLAYING then
+            PauseUI.drawHUD(world.currentLevel)
+        end
+        PauseUI.drawOverlay()
+    end
 end
 
 ------------------------------------------------------------
@@ -1761,9 +1873,73 @@ function love.load()
             SFX[name] = love.audio.newSource(path, "static")
         end
     end
+    -- Procedurally synthesized UI sounds (tick/page/locked/shatter/mater/stamp)
+    for k, v in pairs(SfxSynth.generate()) do
+        SFX[k] = v
+    end
+    SFX.click = SFX.menu_click or SFX.tick
+
+    -- Save data + hand-drawn UI core
+    SaveData.init(#levels)
+    SaveData.load()
+    Sketch.init({
+        fontPath = love.filesystem.getInfo(cnFontPath) and cnFontPath or nil,
+        playSFX = playSFX,
+    })
 
     initMenuBackground()
     gameWorld = GameLogic.createWorld()
+
+    -- Hand-drawn UI modules
+    PauseUI.init({
+        Sketch = Sketch,
+        SaveData = SaveData,
+        RunTimer = RunTimer,
+        playSFX = playSFX,
+        previewShake = function(mag) gameWorld.shake = mag end,
+        onReturnToMenu = function()
+            RunTimer.stop()
+            RunTimer.breakFullRun()
+            PauseUI.close()
+            GameLogic.loadLevel(gameWorld, gameWorld.currentLevel)
+            gameWorld.state = STATE.MENU
+        end,
+        sprites = { mothA = SPRITE_DATA.mothA, mothB = SPRITE_DATA.mothB },
+    })
+    LevelSelect.init({
+        Sketch = Sketch,
+        SaveData = SaveData,
+        playSFX = playSFX,
+        onPick = function(n)
+            PauseUI.close()
+            GameLogic.loadLevel(gameWorld, n)
+            RunTimer.startRun(n == 1)
+            gameWorld.state = STATE.TRANSITION_IN
+            gameWorld.transition.timer = 0
+            gameWorld.transition.phase = "in"
+            gameWorld.transition.radius = 0
+        end,
+        onBack = function() gameWorld.state = STATE.MENU end,
+    })
+    Victory.init({
+        Sketch = Sketch,
+        SaveData = SaveData,
+        RunTimer = RunTimer,
+        playSFX = playSFX,
+        onBack = function() gameWorld.state = STATE.MENU end,
+        setShake = function(mag) gameWorld.shake = mag end,
+    })
+    TransformFX.init({
+        PAL = PAL,
+        WORLD_W = WORLD_W,
+        logicToScreenY = logicToScreenY,
+        playSFX = playSFX,
+        Sketch = Sketch,
+        mothA = SPRITE_DATA.mothA,
+        mothB = SPRITE_DATA.mothB,
+        voidA = VoidBat.SPRITES.voidA,
+        voidB = VoidBat.SPRITES.voidB,
+    })
 
     -- Initialize map editor
     Editor.init({
@@ -1779,6 +1955,9 @@ end
 function love.resize() GameRender.resize() end
 
 function love.update(dt)
+    Sketch.update(dt)
+    PauseUI.update(dt)
+
     -- Editor mode (editing)
     if gameWorld.state == STATE.EDITOR then
         Editor.update(dt)
@@ -1816,6 +1995,7 @@ end
 
 startMenuTransition = function()
     if gameWorld.state ~= STATE.MENU then return end
+    PauseUI.close()
     playSFX("menu_click")
     gameWorld.state = STATE.MENU_TRANSITION
     MenuSystem.transTimer = 0
@@ -1915,15 +2095,52 @@ function love.keypressed(key)
         return
     end
 
-    if key == "escape" then love.event.quit() end
-
-    -- Menu: keyboard shortcuts
-    if gameWorld.state == STATE.MENU then
-        if key == "return" then
-            startMenuTransition()  -- Enter starts game
+    -- Esc: layered close cascade
+    if key == "escape" then
+        local st = gameWorld.state
+        if st == STATE.READY or st == STATE.PLAYING then
+            if PauseUI.open and PauseUI.settingsOpen then
+                PauseUI.settingsOpen = false
+                playSFX("page")
+            else
+                PauseUI.toggle()
+            end
+        elseif st == STATE.LEVEL_SELECT or st == STATE.VICTORY then
+            playSFX("page")
+            gameWorld.state = STATE.MENU
+        elseif st == STATE.MENU then
+            if PauseUI.resetConfirm then
+                PauseUI.resetConfirm = false
+                playSFX("page")
+            elseif PauseUI.menuSettingsOpen then
+                PauseUI.menuSettingsOpen = false
+                playSFX("page")
+            else
+                love.event.quit()
+            end
         end
         return
     end
+
+    -- Level select: arrow keys flip pages
+    if gameWorld.state == STATE.LEVEL_SELECT then
+        if key == "left" then LevelSelect.flip(-1) end
+        if key == "right" then LevelSelect.flip(1) end
+        return
+    end
+
+    if gameWorld.state == STATE.VICTORY then return end
+
+    -- Menu: keyboard shortcuts
+    if gameWorld.state == STATE.MENU then
+        if key == "return" and not PauseUI.menuSettingsOpen then
+            GameLogic.loadLevel(gameWorld, 1)
+            startMenuTransition()  -- Enter starts new game
+        end
+        return
+    end
+
+    if PauseUI.open then return end
 
     if key == "space" or key == "up" or key == "w" then actions.jump = true end
     if key == "n" then GameLogic.triggerWin(gameWorld) end
@@ -1964,11 +2181,22 @@ function love.mousepressed(x, y, btn)
 
     if btn == 1 then
         if gameWorld.state == STATE.MENU then
+            if PauseUI.menuSettingsOpen then
+                Sketch.click(x, y)
+                return
+            end
             handleMenuClickNative(x, y)
             return
+        elseif gameWorld.state == STATE.LEVEL_SELECT or gameWorld.state == STATE.VICTORY then
+            Sketch.click(x, y)
+            return
         elseif gameWorld.state == STATE.READY or gameWorld.state == STATE.DEAD then
+            if Sketch.click(x, y) then return end
+            if PauseUI.open then return end
             actions.jump = true
         elseif gameWorld.state == STATE.PLAYING then
+            if Sketch.click(x, y) then return end
+            if PauseUI.open then return end
             if x < love.graphics.getWidth()/2 then actions.moveLeft = true
             else actions.moveRight = true end
         end
@@ -2026,11 +2254,22 @@ end
 
 function love.touchpressed(id, x, y)
     if gameWorld.state == STATE.MENU then
+        if PauseUI.menuSettingsOpen then
+            Sketch.click(x, y)
+            return
+        end
         handleMenuClickNative(x, y)
         return
+    elseif gameWorld.state == STATE.LEVEL_SELECT or gameWorld.state == STATE.VICTORY then
+        Sketch.click(x, y)
+        return
     elseif gameWorld.state == STATE.READY or gameWorld.state == STATE.DEAD then
+        if Sketch.click(x, y) then return end
+        if PauseUI.open then return end
         actions.jump = true
     elseif gameWorld.state == STATE.PLAYING then
+        if Sketch.click(x, y) then return end
+        if PauseUI.open then return end
         if x < love.graphics.getWidth()/2 then actions.moveLeft = true
         else actions.moveRight = true end
     end

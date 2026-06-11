@@ -1,0 +1,1237 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Cave Fall — UI 原型 v2 (Steam 发行级美术)</title>
+<style>
+  body { background:#141210; display:flex; flex-direction:column; align-items:center; font-family:"Kaiti SC","STKaiti","KaiTi",serif; margin:0; padding:14px; }
+  canvas#cv { display:block; border:1px solid #3a352e; box-shadow:0 8px 40px rgba(0,0,0,0.6); }
+  #debug { margin-top:10px; color:#8a8378; font-size:13px; max-width:432px; text-align:center; }
+  #debug button { font-family:inherit; background:#262320; color:#d8cdbb; border:1px solid #555; padding:4px 10px; margin:2px; cursor:pointer; border-radius:3px; }
+  #debug button:hover { background:#363230; color:#fff; }
+  #debug .note { color:#5d574d; font-size:11px; margin-top:6px; line-height:1.5; }
+</style>
+</head>
+<body>
+<canvas id="cv" width="432" height="768"></canvas>
+<div id="debug">
+  <button onclick="DBG.clearLevel()">一键通关本关</button>
+  <button onclick="DBG.unlockAll()">解锁全部关卡</button>
+  <button onclick="DBG.resetSave()">清空存档</button>
+  <button onclick="DBG.gotoVictory(true)">通关屏(速通)</button>
+  <button onclick="DBG.gotoVictory(false)">通关屏(非速通)</button>
+  <div class="note">调试栏仅原型用 | Esc=暂停/返回 | ←→=选关翻页 | 点击蝙蝠=踩踏(护甲2次/虚体打不中) | 有声音,请开音量</div>
+</div>
+<script>
+"use strict";
+// ============================================================
+// Cave Fall UI 原型 v2 — Carmine Requiem 手绘美术升级版
+// 对应 Lua 模块: save_data / pause_ui / level_select / victory / transform_fx
+// 世界 108x192, 渲染 4x; 文字按原生分辨率绘制(同游戏 drawMenuNative)
+// ============================================================
+const W = 108, H = 192, S = 4, TOTAL_LEVELS = 36, PER_PAGE = 8;
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+
+const PAL  = { PAPER:'#eaddcf', PAPER_DIM:'#dbcebe', INK:'#111111', FADE:'#8b8b83',
+               BLOOD:'#c8102e', BLOOD_DARK:'#7a0010' };
+const MPAL = { PAPER:'#f4f1ea', PENCIL:'#2c2c2c', PENCIL_L:'#7a7a7a', RED:'#d13438' };
+const SPRITE_COLOR = { B:PAL.INK, W:'#f7f2e6', R:PAL.BLOOD, G:PAL.FADE, D:PAL.BLOOD_DARK };
+const FONT = '"Kaiti SC","STKaiti","KaiTi",serif';
+const FONT_NUM = '"Courier New",monospace';   // 计时器: 打字机风
+
+const SPR = {
+  mothA:  ["B.WRW.B", ".BWWWB.", "..BBB.."],
+  mothB:  ["..BB..", ".BWRB.", ".BWWB.", "B.BB.B"],
+  armorA: ["BG.R.GB", ".BGGGB.", "..BBB.."],
+  armorB: ["..BGB..", ".BGRGB.", ".BGGGB.", "B.BBB.B"],
+  voidA:  ["G.DWD.G", ".GWWWG.", "..GGG.."],
+  voidB:  ["..GG..", ".GWDG.", ".GWWG.", "G.GG.G"],
+  player1:[".B....B.", ".BB..BB.", "..BBBB..", ".BWWRWB.", ".BWWWWB.", "..BBBB..", "..B..B.."],
+  player2:["B......B", ".BB..BB.", "..BBBB..", ".BWWRWB.", ".BWWWWB.", "..BBBB..", ".B....B."],
+};
+
+// ============================================================
+// 工具: 缓动 / 确定性抖动(线条沸腾)
+// ============================================================
+const clamp01 = t => Math.max(0, Math.min(1, t));
+const easeOutCubic = t => 1 - Math.pow(1 - clamp01(t), 3);
+const easeInOut = t => { t = clamp01(t); return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2; };
+const easeOutBack = t => { t = clamp01(t); const c = 1.70158; return 1 + (c+1)*Math.pow(t-1,3) + c*Math.pow(t-1,2); };
+
+let now = 0, dtG = 0.016, boilF = 0;          // boilF: 8fps 更新 → 线条沸腾
+function hashN(n) { const x = Math.sin(n) * 43758.5453; return x - Math.floor(x); }
+const _sidCache = {};
+function sid(s) {                              // 字符串→数字种子
+  if (_sidCache[s] !== undefined) return _sidCache[s];
+  let h = 0; for (let i = 0; i < s.length; i++) h = (h*31 + s.charCodeAt(i)) % 9973;
+  return _sidCache[s] = h;
+}
+function jr(id, k) { return hashN(id*127.1 + k*311.7 + boilF*74.7) * 2 - 1; }  // -1..1
+
+// ============================================================
+// 手绘画笔原语 (屏幕像素坐标)
+// ============================================================
+function sketchLineS(x1, y1, x2, y2, color, alpha, lw, id) {
+  for (let p = 0; p < 2; p++) {               // 双笔画: 主笔 + 轻补笔
+    const j = k => jr(id + p*7.3, k) * 1.7;
+    const mx = (x1+x2)/2 + j(1)*1.6, my = (y1+y2)/2 + j(2)*1.6;
+    ctx.strokeStyle = color; ctx.globalAlpha = alpha * (p ? 0.4 : 1);
+    ctx.lineWidth = lw * (p ? 0.65 : 1); ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x1 + j(3), y1 + j(4));
+    ctx.quadraticCurveTo(mx, my, x2 + j(5), y2 + j(6));
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+// 手绘矩形: 笔画出头(overshoot) — 手绘签名感
+function sketchRect(x, y, w, h, color, alpha, lw, id) {   // 世界坐标
+  const X = x*S, Y = y*S, W2 = w*S, H2 = h*S, o = 3;
+  sketchLineS(X-o, Y, X+W2+o*0.6, Y-1, color, alpha, lw, id+1);
+  sketchLineS(X+W2+1, Y-o*0.6, X+W2, Y+H2+o, color, alpha, lw, id+2);
+  sketchLineS(X+W2+o, Y+H2+1, X-o*0.6, Y+H2, color, alpha, lw, id+3);
+  sketchLineS(X-1, Y+H2+o*0.6, X, Y-o, color, alpha, lw, id+4);
+}
+function roughBlob(cx, cy, r, color, alpha, id) {          // 粗糙墨团(屏幕坐标)
+  if (r <= 0) return;
+  ctx.fillStyle = color; ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  const N = 26;
+  for (let i = 0; i <= N; i++) {
+    const a = i/N * Math.PI*2;
+    const rr = r * (1 + jr(id||1, i)*0.07);
+    const px2 = cx + Math.cos(a)*rr, py2 = cy + Math.sin(a)*rr;
+    i === 0 ? ctx.moveTo(px2, py2) : ctx.lineTo(px2, py2);
+  }
+  ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+}
+function roughFillRect(x, y, w, h, color, alpha, id) {     // 墨水填充(右缘毛糙), 世界坐标
+  if (w <= 0.3) return;
+  ctx.fillStyle = color; ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  const X = x*S, Y = y*S, W2 = w*S, H2 = h*S;
+  ctx.moveTo(X, Y);
+  ctx.lineTo(X + W2 + jr(id,1)*3, Y);
+  ctx.lineTo(X + W2 + jr(id,2)*4, Y + H2*0.5);
+  ctx.lineTo(X + W2 + jr(id,3)*3, Y + H2);
+  ctx.lineTo(X, Y + H2);
+  ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// 纸张质感 (一次性程序生成: 颗粒+纤维+污渍+晕影)
+// ============================================================
+function makePaper(base) {
+  const c = document.createElement('canvas'); c.width = 432; c.height = 768;
+  const g = c.getContext('2d');
+  g.fillStyle = base; g.fillRect(0, 0, 432, 768);
+  const img = g.getImageData(0, 0, 432, 768), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {                  // 颗粒
+    const n = (Math.random()-0.5) * 13;
+    d[i] += n; d[i+1] += n; d[i+2] += n;
+  }
+  g.putImageData(img, 0, 0);
+  g.strokeStyle = 'rgba(120,108,90,0.08)'; g.lineWidth = 1; // 纸纤维
+  for (let i = 0; i < 150; i++) {
+    const x = Math.random()*432, y = Math.random()*768, a = Math.random()*6.28, l = 4+Math.random()*11;
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x+Math.cos(a)*l, y+Math.sin(a)*l); g.stroke();
+  }
+  for (let i = 0; i < 6; i++) {                            // 陈年污渍
+    const x = Math.random()*432, y = Math.random()*768, r = 30+Math.random()*80;
+    const rg = g.createRadialGradient(x, y, r*0.2, x, y, r);
+    rg.addColorStop(0, 'rgba(150,128,96,0.055)'); rg.addColorStop(1, 'rgba(150,128,96,0)');
+    g.fillStyle = rg; g.beginPath(); g.arc(x, y, r, 0, 6.29); g.fill();
+  }
+  const vg = g.createRadialGradient(216, 384, 220, 216, 384, 540); // 晕影
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(28,22,16,0.22)');
+  g.fillStyle = vg; g.fillRect(0, 0, 432, 768);
+  return c;
+}
+const paperMenu = makePaper(MPAL.PAPER);
+const paperGame = makePaper(PAL.PAPER);
+
+// 标题背后的淡墨泼溅 (一次性生成)
+function makeInkSplat() {
+  const c = document.createElement('canvas'); c.width = 280; c.height = 200;
+  const g = c.getContext('2d');
+  g.fillStyle = '#2c2c2c';
+  for (let i = 0; i < 26; i++) {
+    const a = Math.random()*6.28, r = Math.random()*Math.random()*95;
+    const x = 140 + Math.cos(a)*r*1.3, y = 100 + Math.sin(a)*r*0.7;
+    const sz = (1-r/110) * (4+Math.random()*12);
+    g.globalAlpha = 0.05 + Math.random()*0.06;
+    g.beginPath(); g.arc(x, y, sz, 0, 6.29); g.fill();
+  }
+  for (let i = 0; i < 14; i++) {                           // 细小溅点
+    g.globalAlpha = 0.10 + Math.random()*0.12;
+    g.beginPath();
+    g.arc(20+Math.random()*240, 20+Math.random()*160, 0.8+Math.random()*1.8, 0, 6.29); g.fill();
+  }
+  return c;
+}
+const inkSplat = makeInkSplat();
+
+// ============================================================
+// SFX — WebAudio 合成 (纸/墨/骨刺感, 音量挂存档设置)
+// ============================================================
+const SFX = {
+  ac:null, _noise:null,
+  ensure() {
+    if (!this.ac) {
+      this.ac = new (window.AudioContext || window.webkitAudioContext)();
+      const len = this.ac.sampleRate * 0.5;
+      const buf = this.ac.createBuffer(1, len, this.ac.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random()*2-1;
+      this._noise = buf;
+    }
+    if (this.ac.state === 'suspended') this.ac.resume();
+  },
+  vol() { return SaveData.data.volume / 100 * 0.55; },
+  _g(t0, peak, dur) {
+    const g = this.ac.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak*this.vol()), t0+0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+    g.connect(this.ac.destination); return g;
+  },
+  _osc(type, f0, f1, t0, dur, g) {
+    const o = this.ac.createOscillator(); o.type = type;
+    o.frequency.setValueAtTime(f0, t0);
+    if (f1) o.frequency.exponentialRampToValueAtTime(f1, t0+dur);
+    o.connect(g); o.start(t0); o.stop(t0+dur+0.02);
+  },
+  _hiss(t0, dur, peak, f) {
+    const src = this.ac.createBufferSource(); src.buffer = this._noise;
+    const flt = this.ac.createBiquadFilter(); flt.type = 'bandpass'; flt.frequency.value = f; flt.Q.value = 0.8;
+    const g = this._g(t0, peak, dur);
+    src.connect(flt); flt.connect(g); src.start(t0); src.stop(t0+dur+0.02);
+  },
+  play(name) {
+    try {
+      this.ensure(); if (this.vol() <= 0) return;
+      const t = this.ac.currentTime;
+      switch (name) {
+        case 'tick':   this._osc('square', 1900, 0, t, 0.018, this._g(t, 0.05, 0.018)); break;
+        case 'click':  this._osc('triangle', 240, 160, t, 0.07, this._g(t, 0.22, 0.07)); this._hiss(t, 0.04, 0.08, 4000); break;
+        case 'page':   this._hiss(t, 0.16, 0.20, 2200); this._hiss(t+0.03, 0.12, 0.12, 3500); break;
+        case 'locked': this._osc('sine', 90, 60, t, 0.12, this._g(t, 0.3, 0.12)); break;
+        case 'stomp':  this._osc('sine', 130, 50, t, 0.14, this._g(t, 0.5, 0.14)); this._hiss(t, 0.1, 0.3, 900); break;
+        case 'shatter':
+          for (let i = 0; i < 4; i++) this._osc('square', 700+i*420, 300, t+i*0.012, 0.07, this._g(t+i*0.012, 0.12, 0.07));
+          this._hiss(t, 0.14, 0.25, 3000); break;
+        case 'mater':  this._osc('sine', 180, 720, t, 0.45, this._g(t, 0.25, 0.5)); this._hiss(t+0.25, 0.25, 0.1, 5000); break;
+        case 'stamp':  this._osc('sine', 70, 40, t, 0.18, this._g(t, 0.65, 0.18)); this._hiss(t, 0.05, 0.2, 700); break;
+        case 'win': {
+          const seq = [523, 659, 784, 1047];
+          seq.forEach((f, i) => this._osc('triangle', f, 0, t+i*0.13, 0.32, this._g(t+i*0.13, 0.2, 0.32)));
+          break;
+        }
+      }
+    } catch(e) {}
+  },
+};
+// ============================================================
+// MODULE: SaveData → save_data.lua
+// ============================================================
+const SaveData = {
+  data: { furthest:1, bestTime:null, volume:80, shake:2 },
+  load() { try { const s = localStorage.getItem('cavefall_proto');
+                 if (s) this.data = Object.assign(this.data, JSON.parse(s)); } catch(e){} },
+  save() { try { localStorage.setItem('cavefall_proto', JSON.stringify(this.data)); } catch(e){} },
+  markCleared(level) {
+    if (level+1 > this.data.furthest) { this.data.furthest = Math.min(level+1, TOTAL_LEVELS); this.save(); }
+  },
+  submitTime(t) {
+    if (this.data.bestTime === null || t < this.data.bestTime) { this.data.bestTime = t; this.save(); return true; }
+    return false;
+  },
+  resetProgress() { this.data.furthest = 1; this.data.bestTime = null; this.save(); },
+};
+
+// ============================================================
+// MODULE: RunTimer — 墙钟计时(含死亡倒带), 暂停停表
+// ============================================================
+const RunTimer = {
+  time:0, running:false, fullRun:false,
+  startRun(fromLevel1) { this.time = 0; this.running = true; this.fullRun = fromLevel1; },
+  update(dt) { if (this.running && !Pause.open) this.time += dt; },
+  stop() { this.running = false; },
+  breakFullRun() { this.fullRun = false; },
+  fmt(t) { const m = Math.floor(t/60), s = Math.floor(t%60), d = Math.floor((t%1)*10);
+           return (m<10?'0':'')+m+':'+(s<10?'0':'')+s+'.'+d; },
+};
+
+// ============================================================
+// 全局状态 / 点击注册 / 墨滴转场
+// ============================================================
+const ST = { MENU:'MENU', LEVEL_SELECT:'LEVEL_SELECT', PLAYING:'PLAYING', VICTORY:'VICTORY' };
+let state = ST.MENU;
+let shake = 0, flash = 0, flashColor = PAL.PAPER, hitstop = 0;
+let mouse = { x:216, y:384, gx:54, gy:96, down:false };
+let clickables = [];
+function addClick(id, x, y, w, h, cb) { clickables.push({id, x, y, w, h, cb}); }
+function isHover(x, y, w, h) { return mouse.gx>=x && mouse.gx<=x+w && mouse.gy>=y && mouse.gy<=y+h; }
+
+// 墨滴扩散转场 (从点击位置炸开 → 切换 → 收回)
+const Trans = {
+  active:false, phase:null, t:0, cb:null, cx:216, cy:384,
+  go(cb) {
+    if (this.active) return;
+    this.active = true; this.phase = 'out'; this.t = 0; this.cb = cb;
+    this.cx = mouse.x; this.cy = mouse.y;
+    SFX.play('page');
+  },
+  update(dt) {
+    if (!this.active) return;
+    this.t += dt * 2.6;
+    if (this.phase === 'out' && this.t >= 1) { if (this.cb) this.cb(); this.phase = 'in'; this.t = 0; this.cx = 216; this.cy = 300; }
+    else if (this.phase === 'in' && this.t >= 1) this.active = false;
+  },
+  draw() {
+    if (!this.active) return;
+    const p = this.phase === 'out' ? easeInOut(this.t) : 1 - easeInOut(this.t);
+    const R = 900 * p;
+    roughBlob(this.cx, this.cy, R, PAL.INK, 1, 77);
+    // 边缘飞溅墨点
+    if (p > 0.05 && p < 0.95) for (let i = 0; i < 10; i++) {
+      const a = i/10*6.28 + jr(88, i)*0.5;
+      const rr = R + 14 + jr(89, i)*18;
+      roughBlob(this.cx+Math.cos(a)*rr, this.cy+Math.sin(a)*rr, 3+jr(90,i)*2, PAL.INK, 0.9, 91+i);
+    }
+  },
+};
+
+// ============================================================
+// 手绘按钮系统 — hover 墨水填充扫过 + 音效
+// ============================================================
+const hoverT = {}, lastHover = {};
+function button(id, x, y, w, h, label, primary, cb, fontSize) {
+  const hov = isHover(x, y, w, h) && !Trans.active;
+  const key = 'b_' + id;
+  let t = hoverT[key] || 0;
+  t += ((hov?1:0) - t) * Math.min(1, dtG*13);
+  hoverT[key] = t;
+  if (hov && !lastHover[key]) SFX.play('tick');
+  lastHover[key] = hov;
+
+  const col = primary ? MPAL.RED : MPAL.PENCIL;
+  // 阴影 (hover 时抬升感)
+  if (t > 0.03) { ctx.fillStyle = 'rgba(30,24,18,0.18)'; ctx.globalAlpha = t;
+    ctx.fillRect((x+1)*S, (y+1.5)*S, w*S, h*S); ctx.globalAlpha = 1; }
+  // 墨水填充扫过
+  const fillW = w * easeOutCubic(t);
+  roughFillRect(x, y, fillW, h, primary ? PAL.BLOOD : MPAL.PENCIL, 0.92*Math.min(1,t*1.6), sid(key));
+  // 手绘边框 (沸腾)
+  sketchRect(x, y, w, h, col, hov ? 0.95 : (primary ? 0.6 : 0.4), hov ? 2.2 : 1.5, sid(key));
+  // 文字 (墨水盖过时翻白)
+  const tc = t > 0.45 ? MPAL.PAPER : (primary ? MPAL.RED : MPAL.PENCIL);
+  text(label, x + w/2 + t*0.6, y + h/2 + 0.5, fontSize || 26, tc, 'center', 1, primary);
+  addClick(id, x, y, w, h, () => { SFX.play('click'); cb(); });
+  return hov;
+}
+function text(str, gx, gy, sizePx, color, align, alpha, bold, font) {
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.fillStyle = color;
+  ctx.font = (bold?'bold ':'') + sizePx + 'px ' + (font || FONT);
+  ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(str, gx*S, gy*S); ctx.globalAlpha = 1;
+}
+function px(x, y, w, h, color, alpha) {
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.fillStyle = color; ctx.fillRect(x*S, y*S, w*S, h*S); ctx.globalAlpha = 1;
+}
+function drawSprite(rows, x, y, alpha, overrideColor) {
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  const w = rows[0].length, h = rows.length;
+  const ox = Math.round(x - w/2), oy = Math.round(y - h/2);
+  for (let r = 0; r < h; r++) for (let c = 0; c < rows[r].length; c++) {
+    const ch = rows[r][c]; if (ch === '.') continue;
+    ctx.fillStyle = overrideColor || SPRITE_COLOR[ch] || PAL.INK;
+    ctx.fillRect((ox+c)*S, (oy+r)*S, S, S);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// 环境氛围: 尘埃 / 菜单下落铅笔线 / 飞蛾
+// ============================================================
+const dust = [];
+for (let i = 0; i < 26; i++) dust.push({ x:Math.random()*W, y:Math.random()*H,
+  vy:-(1.2+Math.random()*2), ph:Math.random()*6.28, a:0.05+Math.random()*0.08, sz:Math.random()<0.7?1:1.5 });
+function drawDust(dt) {
+  for (const d of dust) {
+    d.y += d.vy*dt; d.ph += dt*1.2;
+    if (d.y < -3) { d.y = H+3; d.x = Math.random()*W; }
+    px(d.x + Math.sin(d.ph)*3, d.y, d.sz, d.sz, MPAL.PENCIL, d.a*(0.7+Math.sin(d.ph*1.7)*0.3));
+  }
+}
+const fallLines = [];
+for (let i = 0; i < 14; i++) fallLines.push({ x:Math.random()*W, y:Math.random()*H,
+  len:15+Math.random()*30, sp:14+Math.random()*22, wob:Math.random()*6.28 });
+const fallDrops = [];
+function drawMenuAmbient(dt) {
+  for (const l of fallLines) {                     // 下落铅笔线
+    l.y += l.sp*dt; l.wob += dt*2;
+    if (l.y > H+l.len) { l.y = -l.len; l.x = Math.random()*W; }
+    const xx = l.x + Math.sin(l.wob)*1.5;
+    ctx.strokeStyle = MPAL.PENCIL_L; ctx.globalAlpha = 0.13; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(xx*S, (l.y-l.len)*S); ctx.lineTo(xx*S, l.y*S); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  if (Math.random() < dt*0.5) fallDrops.push({ x:8+Math.random()*(W-16), y:-4, sp:30+Math.random()*40 });
+  for (let i = fallDrops.length-1; i >= 0; i--) { const d = fallDrops[i];
+    d.y += d.sp*dt;
+    px(d.x, d.y, 1.2, 2.5, MPAL.RED, 0.5); px(d.x+0.1, d.y-2, 1, 2, MPAL.RED, 0.25);
+    if (d.y > H+4) fallDrops.splice(i, 1);
+  }
+}
+const menuMoths = [
+  { x:-10, y:60, sp:7, ph:0 }, { x:W+10, y:130, sp:-5.5, ph:2 },
+];
+function drawMenuMoths(dt) {
+  for (const m of menuMoths) {
+    m.x += m.sp*dt; m.ph += dt*1.6;
+    if (m.sp > 0 && m.x > W+12) { m.x = -12; m.y = 30+Math.random()*120; }
+    if (m.sp < 0 && m.x < -12) { m.x = W+12; m.y = 30+Math.random()*120; }
+    const fy = m.y + Math.sin(m.ph)*5;
+    drawSprite(boilF%2 ? SPR.mothB : SPR.mothA, m.x, fy, 0.5);
+  }
+}
+// ============================================================
+// 主菜单
+// ============================================================
+const Menu = { settingsOpen:false, resetConfirm:false, titleTime:0, dripT:[0, 1.2, 2.6] };
+
+function drawPaperBg(menuStyle) { ctx.drawImage(menuStyle ? paperMenu : paperGame, 0, 0); }
+
+function drawMenu(dt) {
+  Menu.titleTime += dt;
+  drawPaperBg(true);
+  drawMenuAmbient(dt);
+  drawDust(dt);
+  drawMenuMoths(dt);
+
+  // ---- 标题区: 墨泼 + 坠落 + FALL 印章 + 血滴 ----
+  const floatY = Math.sin(Menu.titleTime) * 1;
+  ctx.save();
+  ctx.translate(W/2*S, (H*0.21 + floatY)*S);
+  ctx.rotate(-3*Math.PI/180);
+  ctx.globalAlpha = 0.9; ctx.drawImage(inkSplat, -140, -88); ctx.globalAlpha = 1;
+  // 主标题: 三层(淡影/深影/主体)
+  ctx.font = 'bold 100px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(44,44,44,0.18)'; ctx.fillText('坠落', 6, 7);
+  ctx.fillStyle = MPAL.PENCIL_L; ctx.fillText('坠落', 2.5, 2.5);
+  ctx.fillStyle = MPAL.PENCIL; ctx.fillText('坠落', 0, 0);
+  // FALL 红印章 (盖章感: 旋转 + 沸腾边框)
+  ctx.save();
+  ctx.translate(27*S, 17*S); ctx.rotate(-8*Math.PI/180);
+  ctx.font = 'bold 26px ' + FONT_NUM; ctx.fillStyle = MPAL.RED;
+  ctx.globalAlpha = 0.85; ctx.fillText('FALL', 0, 0);
+  sketchLineS(-34, -14, 34, -15, MPAL.RED, 0.5, 1.5, 411);
+  sketchLineS(34, -15, 35, 14, MPAL.RED, 0.5, 1.5, 412);
+  sketchLineS(35, 14, -35, 15, MPAL.RED, 0.5, 1.5, 413);
+  sketchLineS(-35, 15, -34, -14, MPAL.RED, 0.5, 1.5, 414);
+  ctx.restore();
+  // 手绘双下划线
+  sketchLineS(-36*S, 23*S, 36*S, 24*S, MPAL.PENCIL, 0.9, 3, 415);
+  sketchLineS(-33*S, 26*S, 33*S, 27*S, MPAL.PENCIL, 0.4, 1.6, 416);
+  ctx.restore();
+  // 血滴从标题滴落
+  for (let i = 0; i < 3; i++) {
+    Menu.dripT[i] += dt;
+    const cycle = 3.5 + i*0.9;
+    const t = Menu.dripT[i] % cycle;
+    const dx = W/2 - 14 + i*13, dy0 = H*0.21 + 9;
+    if (t < 1.2) { // 积聚
+      const g = t/1.2;
+      px(dx, dy0, 1.2, 1 + g*2.2, PAL.BLOOD, 0.75);
+    } else if (t < 2.2) { // 下落
+      const f = (t-1.2)/1.0;
+      px(dx, dy0 + f*f*36, 1.2, 3, PAL.BLOOD, 0.75*(1-f*0.4));
+    }
+  }
+
+  if (!Menu.settingsOpen) {
+    const items = [ ['继续游戏', true,  () => Trans.go(() => LevelSelect.enter())],
+                    ['新游戏',   false, () => Trans.go(() => Game.startLevel(1, true))],
+                    ['设置',     false, () => { Menu.settingsOpen = true; SFX.play('page'); }] ];
+    items.forEach((b, i) => button('menu'+i, W/2-32, H*0.52 + i*22, 64, 16, b[0], b[1], b[2]));
+    text('CAVE FALL · 原型 v2', W/2, H-7, 13, MPAL.PENCIL_L, 'center', 0.55, false, FONT_NUM);
+  } else {
+    drawSettingsPanel(true);
+  }
+}
+
+// ============================================================
+// 设置面板 (菜单/暂停共用; 重置进度仅主菜单) → pause_ui.lua
+// ============================================================
+let dragVol = false;
+function drawSettingsPanel(fromMenu) {
+  ctx.fillStyle = MPAL.PAPER; ctx.globalAlpha = 0.96;
+  ctx.fillRect(0, 0, cv.width, cv.height); ctx.globalAlpha = 1;
+  ctx.globalAlpha = 0.5; ctx.drawImage(paperMenu, 0, 0); ctx.globalAlpha = 1;
+  drawDust(dtG);
+
+  text('设 置', W/2, 26, 42, MPAL.PENCIL, 'center', 1, true);
+  drawSprite(boilF%2 ? SPR.mothB : SPR.mothA, W/2-30, 26, 0.5);
+  drawSprite(boilF%2 ? SPR.mothA : SPR.mothB, W/2+30, 26, 0.5);
+  sketchLineS(20*S, 37*S, (W-20)*S, 37.5*S, MPAL.PENCIL_L, 0.55, 1.4, 420);
+
+  // --- 音量滑条 (支持拖动) ---
+  const vy = 56;
+  text('主音量', 20, vy, 24, MPAL.PENCIL, 'left');
+  const barX = 20, barW = 60, barY = vy + 10;
+  sketchLineS(barX*S, (barY+1)*S, (barX+barW)*S, (barY+1)*S, MPAL.PENCIL_L, 0.5, 2, 421);
+  const frac = SaveData.data.volume / 100;
+  ctx.strokeStyle = PAL.BLOOD; ctx.lineWidth = 3.5; ctx.lineCap = 'round'; ctx.globalAlpha = 0.85;
+  ctx.beginPath(); ctx.moveTo(barX*S, (barY+1)*S); ctx.lineTo((barX+barW*frac)*S, (barY+1)*S); ctx.stroke();
+  ctx.globalAlpha = 1;
+  const knobX = barX + barW*frac;
+  const knobHov = isHover(knobX-4, barY-4, 8, 10) || dragVol;
+  roughBlob(knobX*S, (barY+1)*S, (knobHov ? 4.2 : 3.4)*S, PAL.BLOOD, 1, 422); // 血蜡旋钮
+  roughBlob((knobX-0.8)*S, (barY+0.2)*S, 1.1*S, '#e8607a', 0.7, 423);          // 高光
+  text(String(SaveData.data.volume), W-16, barY+1, 24, MPAL.PENCIL, 'right', 1, false, FONT_NUM);
+  addClick('volbar', barX-4, barY-6, barW+8, 14, () => {
+    dragVol = true;
+    SaveData.data.volume = Math.round(clamp01((mouse.gx-barX)/barW)*20)*5; SaveData.save();
+  });
+
+  // --- 震动: 三枚印章选项 ---
+  const sy2 = 92;
+  text('画面震动', 20, sy2, 24, MPAL.PENCIL, 'left');
+  ['关','弱','开'].forEach((o, i) => {
+    const ox = 56 + i*17, sel = SaveData.data.shake === i;
+    const hov = isHover(ox-6.5, sy2-6, 13, 12);
+    if (sel) {
+      roughBlob(ox*S, (sy2+0.3)*S, 6.4*S, PAL.BLOOD, 0.13, 425+i);
+      sketchRect(ox-6, sy2-5.5, 12, 11, MPAL.RED, 0.9, 2, 430+i);
+    } else if (hov) sketchRect(ox-6, sy2-5.5, 12, 11, MPAL.PENCIL, 0.5, 1.4, 430+i);
+    text(o, ox, sy2+0.5, 24, sel ? MPAL.RED : (hov ? MPAL.PENCIL : MPAL.PENCIL_L), 'center', 1, sel);
+    addClick('shake'+i, ox-6.5, sy2-6, 13, 12, () => { SaveData.data.shake = i; SaveData.save();
+      SFX.play('click'); if (i > 0) shake = i === 1 ? 4 : 8; });
+  });
+
+  // --- 重置进度 (仅主菜单, 二次确认) ---
+  if (fromMenu) {
+    const ry = 122;
+    button('resetbtn', W/2-32, ry, 64, 14, '重置进度', false, () => { Menu.resetConfirm = true; }, 22);
+    text('当前进度  第 ' + SaveData.data.furthest + ' 关', W/2, ry+21, 16, MPAL.PENCIL_L);
+    if (SaveData.data.bestTime !== null)
+      text('最佳纪录  ' + RunTimer.fmt(SaveData.data.bestTime), W/2, ry+29, 15, MPAL.PENCIL_L, 'center', 0.85, false, FONT_NUM);
+  }
+
+  button('setback', W/2-32, H-32, 64, 16, '返 回', true,
+    () => { if (fromMenu) Menu.settingsOpen = false; else Pause.settingsOpen = false; });
+
+  if (fromMenu && Menu.resetConfirm)
+    drawConfirmDialog('确认重置全部进度？', '该操作无法撤销',
+      () => { SaveData.resetProgress(); Menu.resetConfirm = false; SFX.play('stamp'); },
+      () => { Menu.resetConfirm = false; });
+}
+
+function drawConfirmDialog(title, sub, onYes, onNo) {
+  ctx.fillStyle = PAL.INK; ctx.globalAlpha = 0.55;
+  ctx.fillRect(0, 0, cv.width, cv.height); ctx.globalAlpha = 1;
+  addClick('dlgblock', 0, 0, W, H, () => {});
+  const dx = 11, dy = 68, dw = W-22, dh = 54;
+  ctx.save();
+  ctx.translate(W/2*S, (dy+dh/2)*S); ctx.rotate(-0.7*Math.PI/180);
+  ctx.translate(-W/2*S, -(dy+dh/2)*S);
+  ctx.fillStyle = 'rgba(20,16,12,0.4)'; ctx.fillRect((dx+1.5)*S, (dy+2)*S, dw*S, dh*S); // 投影
+  ctx.fillStyle = MPAL.PAPER; ctx.fillRect(dx*S, dy*S, dw*S, dh*S);
+  sketchRect(dx, dy, dw, dh, MPAL.PENCIL, 0.85, 2, 440);
+  text(title, W/2, dy+13, 25, MPAL.PENCIL, 'center', 1, true);
+  text(sub, W/2, dy+24, 16, MPAL.RED);
+  button('dlgno',  dx+6,      dy+dh-18, (dw-18)/2, 13, '取 消', false, onNo, 20);
+  button('dlgyes', dx+dw/2+3, dy+dh-18, (dw-18)/2, 13, '确认重置', true, onYes, 20);
+  ctx.restore();
+}
+// ============================================================
+// MODULE: LevelSelect → level_select.lua
+// 散落卡片 + 翻页动画 + 血蜡封印✓ + 铅笔排线锁定 + 红框脉冲
+// ============================================================
+const LevelSelect = {
+  page:0, shakeLock:0, shakeLockId:-1, pageAnim:1, pageDir:1,
+  enter() {
+    this.page = Math.floor((SaveData.data.furthest-1) / PER_PAGE);
+    this.pageAnim = 1; state = ST.LEVEL_SELECT;
+  },
+  totalPages() { return Math.ceil(TOTAL_LEVELS / PER_PAGE); },
+  flip(dir) {
+    const np = this.page + dir;
+    if (np < 0 || np >= this.totalPages()) return;
+    this.page = np; this.pageDir = dir; this.pageAnim = 0; SFX.play('page');
+  },
+  clickLevel(n) {
+    if (n > SaveData.data.furthest) {
+      this.shakeLock = 0.45; this.shakeLockId = n; SFX.play('locked'); return;
+    }
+    SFX.play('click');
+    Trans.go(() => Game.startLevel(n, n === 1));
+  },
+};
+
+function drawLevelSelect(dt) {
+  drawPaperBg(true);
+  drawDust(dt);
+  if (LevelSelect.shakeLock > 0) LevelSelect.shakeLock -= dt;
+  LevelSelect.pageAnim = Math.min(1, LevelSelect.pageAnim + dt*4.5);
+
+  // 标题
+  ctx.save();
+  ctx.translate(W/2*S, 17*S); ctx.rotate(-1.2*Math.PI/180);
+  ctx.font = 'bold 42px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = MPAL.PENCIL_L; ctx.fillText('选择关卡', 2, 2);
+  ctx.fillStyle = MPAL.PENCIL; ctx.fillText('选择关卡', 0, 0);
+  ctx.restore();
+  sketchLineS(24*S, 27*S, (W-24)*S, 27.5*S, MPAL.PENCIL_L, 0.55, 1.4, 450);
+  if (!(LevelSelect.shakeLock > 0.05))
+    text('已通关 ' + (SaveData.data.furthest-1) + ' / ' + TOTAL_LEVELS, W/2, 33, 15, MPAL.PENCIL_L, 'center', 0.8);
+
+  const page = LevelSelect.page, furthest = SaveData.data.furthest;
+  const cellW = 40, cellH = 23, gapX = 9, gapY = 5;
+  const gridX = (W - cellW*2 - gapX)/2, gridY = 39;
+  const slide = (1 - easeOutCubic(LevelSelect.pageAnim)) * 26 * LevelSelect.pageDir;
+  const fade = easeOutCubic(LevelSelect.pageAnim);
+
+  for (let i = 0; i < PER_PAGE; i++) {
+    const n = page*PER_PAGE + i + 1;
+    if (n > TOTAL_LEVELS) break;
+    const col = i%2, row = Math.floor(i/2);
+    let x = gridX + col*(cellW+gapX) - slide, y = gridY + row*(cellH+gapY);
+    const locked = n > furthest, cleared = n < furthest, current = n === furthest;
+    if (locked && LevelSelect.shakeLockId === n && LevelSelect.shakeLock > 0)
+      x += Math.sin(LevelSelect.shakeLock*55) * 1.6;
+    const hov = !locked && isHover(x, y, cellW, cellH) && !Trans.active;
+    const key = 'lv'+n;
+    let ht = hoverT[key] || 0; ht += ((hov?1:0)-ht)*Math.min(1, dtG*13); hoverT[key] = ht;
+    if (hov && !lastHover[key]) SFX.play('tick');
+    lastHover[key] = hov;
+
+    ctx.save();
+    ctx.globalAlpha = fade;
+    // 散落感: 每张卡片固定微倾斜; hover 时抬起放大
+    const rot = (hashN(n*17.3)*2-1) * 1.5 * Math.PI/180;
+    const cx2 = (x+cellW/2)*S, cy2 = (y+cellH/2)*S;
+    ctx.translate(cx2, cy2 - ht*4); ctx.rotate(rot*(1-ht*0.6)); ctx.scale(1+ht*0.05, 1+ht*0.05);
+    ctx.translate(-cx2, -cy2);
+
+    if (locked) {
+      // 锁定: 灰卡 + 铅笔排线 + 锁
+      px(x, y, cellW, cellH, MPAL.PENCIL_L, 0.08);
+      ctx.strokeStyle = MPAL.PENCIL_L; ctx.globalAlpha = 0.5*fade; ctx.lineWidth = 1;
+      for (let hx = -cellH; hx < cellW; hx += 5) {        // 斜排线
+        ctx.beginPath();
+        ctx.moveTo((x+Math.max(0,hx))*S, (y+Math.max(0,-hx))*S);
+        ctx.lineTo((x+Math.min(cellW,hx+cellH))*S, (y+Math.min(cellH,cellH-(hx+cellH-cellW>0?hx+cellH-cellW:0)))*S);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = fade;
+      sketchRect(x, y, cellW, cellH, MPAL.PENCIL_L, 0.4, 1.2, sid(key));
+      text(String(n), x+cellW/2-6, y+cellH/2+0.5, 30, MPAL.PENCIL_L, 'center', 0.5*fade);
+      const lx = x+cellW/2+9, ly = y+cellH/2+1;            // 锁
+      px(lx-3.5, ly-1.5, 7, 6, MPAL.PENCIL_L, 0.75);
+      px(lx-1, ly+0.5, 2, 2.4, MPAL.PAPER, 0.8);
+      ctx.strokeStyle = MPAL.PENCIL_L; ctx.globalAlpha = 0.75*fade; ctx.lineWidth = 2.2;
+      ctx.beginPath(); ctx.arc(lx*S, (ly-2)*S, 2.2*S, Math.PI, 0); ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else {
+      // 可玩卡片: 纸卡 + 阴影
+      if (ht > 0.03) { ctx.fillStyle = 'rgba(25,20,15,0.22)'; ctx.globalAlpha = ht*fade;
+        ctx.fillRect((x+1)*S, (y+2)*S, cellW*S, cellH*S); ctx.globalAlpha = fade; }
+      px(x, y, cellW, cellH, '#fbf8f2', 0.65);
+      if (current) {
+        const pulse = 0.55 + Math.sin(now*4)*0.25;
+        roughBlob((x+cellW/2)*S, (y+cellH/2)*S, (cellW/2+4)*S*0.62, PAL.BLOOD, 0.06+0.04*Math.sin(now*4), sid(key)+9);
+        sketchRect(x, y, cellW, cellH, MPAL.RED, hov ? 0.95 : pulse, hov ? 2.6 : 2.1, sid(key));
+        text('当前', x+cellW-8, y+4.5, 13, MPAL.RED, 'center', 0.9);
+      } else {
+        sketchRect(x, y, cellW, cellH, MPAL.PENCIL, hov ? 0.9 : 0.42, hov ? 2 : 1.4, sid(key));
+      }
+      text(String(n), x+cellW/2+(cleared?-5:0), y+cellH/2+0.5, 33,
+           hov || current ? MPAL.RED : MPAL.PENCIL, 'center', fade, current);
+      if (cleared) {                                        // 血蜡封印 ✓
+        const sx2 = x+cellW/2+9, sy3 = y+cellH/2;
+        roughBlob(sx2*S, sy3*S, 4.6*S, PAL.BLOOD, 0.85, sid(key)+5);
+        roughBlob((sx2-1)*S, (sy3-1)*S, 1.4*S, '#e8607a', 0.45, sid(key)+6);
+        ctx.strokeStyle = MPAL.PAPER; ctx.lineWidth = 2.4; ctx.globalAlpha = 0.95*fade; ctx.lineCap='round';
+        ctx.beginPath(); ctx.moveTo((sx2-2.2)*S, sy3*S); ctx.lineTo((sx2-0.6)*S, (sy3+1.8)*S);
+        ctx.lineTo((sx2+2.6)*S, (sy3-2.2)*S); ctx.stroke(); ctx.globalAlpha = 1;
+      }
+    }
+    ctx.restore();
+    addClick(key, x, y, cellW, cellH, () => LevelSelect.clickLevel(n));
+  }
+
+  // 锁定提示气泡
+  if (LevelSelect.shakeLock > 0.05 && LevelSelect.shakeLockId > 0) {
+    const a = Math.min(1, LevelSelect.shakeLock*4);
+    text('通关第 ' + (LevelSelect.shakeLockId-1) + ' 关后解锁', W/2, 33, 15, MPAL.RED, 'center', a*0.9);
+  }
+
+  // 分页: 箭头 + 页码点
+  const py = gridY + 4*(cellH+gapY) + 4, tp = LevelSelect.totalPages();
+  const arrowBtn = (id, dir, ax) => {
+    const en = dir < 0 ? page > 0 : page < tp-1;
+    const hov = en && isHover(ax, py-3, 16, 14);
+    const bounce = hov ? Math.sin(now*8)*0.8 : 0;
+    text(dir < 0 ? '◀' : '▶', ax+8+bounce*dir, py+4, 28, en ? (hov ? MPAL.RED : MPAL.PENCIL) : MPAL.PENCIL_L,
+         'center', en ? 1 : 0.22);
+    if (en) addClick(id, ax, py-3, 16, 14, () => LevelSelect.flip(dir));
+    if (hov && !lastHover[id]) SFX.play('tick');
+    lastHover[id] = hov;
+  };
+  arrowBtn('pgL', -1, W/2-36);
+  arrowBtn('pgR',  1, W/2+20);
+  text((page+1)+' / '+tp, W/2, py+4, 24, MPAL.PENCIL, 'center', 1, false, FONT_NUM);
+  for (let i = 0; i < tp; i++) {                            // 页码点
+    const dotX = W/2 + (i - (tp-1)/2)*7;
+    if (i === page) roughBlob(dotX*S, (py+13)*S, 1.8*S, PAL.BLOOD, 0.9, 460+i);
+    else { px(dotX-0.8, py+12.3, 1.6, 1.6, MPAL.PENCIL_L, 0.45);
+           addClick('dot'+i, dotX-3, py+10, 6, 6, () => LevelSelect.flip(i - page)); }
+  }
+
+  button('lsback', W/2-32, H-18, 64, 14, '返 回', false, () => Trans.go(() => { state = ST.MENU; }), 24);
+}
+// ============================================================
+// MODULE: PauseUI → pause_ui.lua
+// ============================================================
+const Pause = {
+  open:false, settingsOpen:false, slide:0,
+  toggle() {
+    if (state !== ST.PLAYING) return;
+    this.open = !this.open;
+    SFX.play(this.open ? 'page' : 'click');
+    if (!this.open) this.settingsOpen = false;
+  },
+  close() { this.open = false; this.settingsOpen = false; },
+  update(dt) { this.slide += ((this.open?1:0) - this.slide) * Math.min(1, dt*13); },
+};
+
+// ============================================================
+// MODULE: TransformFX → transform_fx.lua
+// ============================================================
+const TransformFX = {
+  list:[], cueText:null, cueT:0,
+  startArmorBreak(bat) {
+    bat.transforming = true;
+    const frags = [];
+    for (let i = 0; i < 12; i++) { const a = Math.random()*6.28, sp = 28+Math.random()*40;
+      frags.push({ x:bat.x, y:bat.y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-22,
+                   rot:Math.random()*6.28, c:Math.random()<0.7?PAL.FADE:PAL.INK, sz:Math.random()<0.5?1:1.8 }); }
+    this.list.push({ kind:'armor', bat, t:0, dur:0.5, frags });
+    this.cueText = '破甲!'; this.cueT = 0.7; this.cueX = bat.x; this.cueY = bat.y - 10; this.cueCol = PAL.BLOOD;
+    hitstop = 0.08; shake = Math.max(shake, 6); flash = 0.25; flashColor = '#ffffff';
+    SFX.play('shatter');
+  },
+  startVoidMaterialize(bats) {
+    shake = Math.max(shake, 5);
+    SFX.play('mater');
+    this.cueText = '虚影凝实'; this.cueT = 1.1; this.cueX = W/2; this.cueY = 95; this.cueCol = PAL.BLOOD_DARK;
+    bats.forEach((bat, i) => {
+      bat.transforming = true;
+      const conv = [];
+      for (let j = 0; j < 14; j++) conv.push({ a:Math.random()*6.28, r:15+Math.random()*11,
+        c:Math.random()<0.6?PAL.FADE:PAL.BLOOD_DARK });
+      this.list.push({ kind:'void', bat, t:-i*0.13, dur:0.55, conv });
+    });
+  },
+  update(dt) {
+    if (this.cueT > 0) this.cueT -= dt;
+    for (let i = this.list.length-1; i >= 0; i--) {
+      const fx = this.list[i]; fx.t += dt;
+      if (fx.kind === 'armor') for (const f of fx.frags) {
+        f.x += f.vx*dt; f.y += f.vy*dt; f.vy += 170*dt; f.rot += dt*9; }
+      if (fx.t >= fx.dur) {
+        fx.bat.transforming = false;
+        if (fx.kind === 'armor') fx.bat.type = 'basic';
+        if (fx.kind === 'void') { fx.bat.voidState = false; flash = Math.max(flash, 0.15); flashColor = '#ffffff'; }
+        this.list.splice(i, 1);
+      }
+    }
+  },
+  anyVoidActive() { return this.list.some(f => f.kind === 'void'); },
+  isTransforming(bat) { return !!bat.transforming; },
+  drawCue() {
+    if (this.cueT <= 0 || !this.cueText) return;
+    const a = Math.min(1, this.cueT*3);
+    const rise = (1 - this.cueT/1.1) * 4;
+    ctx.save();
+    ctx.translate(this.cueX*S, (this.cueY - rise)*S); ctx.rotate(-2*Math.PI/180);
+    ctx.font = 'bold ' + (this.cueText.length > 2 ? 30 : 26) + 'px ' + FONT;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.globalAlpha = a*0.9;
+    ctx.fillStyle = MPAL.PAPER; ctx.fillText(this.cueText, 1.5, 1.5);
+    ctx.fillStyle = this.cueCol; ctx.fillText(this.cueText, 0, 0);
+    ctx.restore(); ctx.globalAlpha = 1;
+  },
+};
+
+// ============================================================
+// 踩踏粒子
+// ============================================================
+const particles = [];
+function burst(x, y) {
+  for (let i = 0; i < 20; i++) { const a = Math.random()*6.28, sp = 22+Math.random()*65;
+    particles.push({ x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-32, life:0.6+Math.random()*0.4,
+      c:Math.random()>0.5?PAL.BLOOD:PAL.BLOOD_DARK, sz:Math.random()<0.6?1:2 }); }
+  shake = Math.max(shake, 8); hitstop = Math.max(hitstop, 0.06);
+  flash = 0.2; flashColor = PAL.BLOOD;
+  SFX.play('stomp');
+}
+function updateParticles(dt) {
+  for (let i = particles.length-1; i >= 0; i--) { const p = particles[i];
+    p.x += p.vx*dt; p.y += p.vy*dt; p.vy += 190*dt; p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1); }
+}
+
+// ============================================================
+// 假玩法层 (原型专用)
+// ============================================================
+const Game = {
+  level:1, bats:[], clearBanner:0, voidHint:0, levelDone:false, introT:0, walls:null,
+  startLevel(n, isFullRunStart) {
+    this.level = n; this.levelDone = false; this.clearBanner = 0; this.introT = 1.1;
+    Pause.close(); particles.length = 0; TransformFX.list.length = 0; TransformFX.cueT = 0;
+    if (isFullRunStart !== undefined) RunTimer.startRun(isFullRunStart);
+    this.bats = [
+      { type:'basic', x:54, y:74,  alive:true, ph:Math.random()*6 },
+      { type:'armor', x:30, y:104, alive:true, ph:Math.random()*6 },
+      { type:'armor', x:78, y:104, alive:true, ph:Math.random()*6 },
+      { type:'void',  x:40, y:142, alive:true, voidState:true, ph:Math.random()*6 },
+      { type:'void',  x:68, y:142, alive:true, voidState:true, ph:Math.random()*6 },
+    ];
+    // 粗糙洞壁轮廓 (每关重新生成)
+    this.walls = { L:[], R:[] };
+    for (let y = 0; y <= H; y += 6) {
+      this.walls.L.push({ y, x: 9 + Math.sin(y*0.07 + n)*2.2 + hashN(y*3.7+n)*2.5 });
+      this.walls.R.push({ y, x: W-9 - Math.sin(y*0.09 + n*2)*2.2 - hashN(y*5.1+n)*2.5 });
+    }
+    state = ST.PLAYING;
+  },
+  baseCleared() { return this.bats.every(b => !b.alive || b.type === 'void'); },
+  allCleared()  { return this.bats.every(b => !b.alive); },
+  stomp(bat) {
+    if (!bat.alive || TransformFX.isTransforming(bat)) return;
+    if (bat.type === 'void' && bat.voidState) { this.voidHint = 1.2; SFX.play('locked'); return; }
+    if (bat.type === 'armor') { TransformFX.startArmorBreak(bat); return; }
+    bat.alive = false; burst(bat.x, bat.y);
+    if (this.baseCleared()) {
+      const vb = this.bats.filter(b => b.alive && b.type === 'void' && b.voidState);
+      if (vb.length) TransformFX.startVoidMaterialize(vb);
+    }
+    if (this.allCleared() && !this.levelDone) this.win();
+  },
+  win() {
+    this.levelDone = true;
+    SaveData.markCleared(this.level);
+    if (this.level >= TOTAL_LEVELS) setTimeout(() => Victory.enter(), 600);
+    else this.clearBanner = 1.1;
+  },
+  update(dt) {
+    if (this.voidHint > 0) this.voidHint -= dt;
+    if (this.introT > 0) this.introT -= dt;
+    if (this.clearBanner > 0) {
+      this.clearBanner -= dt;
+      if (this.clearBanner <= 0) this.startLevel(this.level + 1);
+    }
+  },
+};
+// ============================================================
+// 游戏画面绘制
+// ============================================================
+function drawPlaying(dt) {
+  let shx = 0, shy = 0;
+  if (shake > 0 && SaveData.data.shake > 0) {
+    const mag = shake * (SaveData.data.shake === 1 ? 0.4 : 1);
+    shx = (Math.random()-0.5)*mag*0.6; shy = (Math.random()-0.5)*mag*0.6;
+  }
+  ctx.save(); ctx.translate(shx, shy);
+  drawPaperBg(false);
+
+  // 粗糙墨色洞壁
+  const drawWall = (pts, isLeft) => {
+    ctx.fillStyle = PAL.INK; ctx.beginPath();
+    ctx.moveTo(isLeft ? -8 : (W+8)*S, -8);
+    for (const p of pts) ctx.lineTo((p.x + jr(500+p.y, 1)*0.4)*S, p.y*S);
+    ctx.lineTo(isLeft ? -8 : (W+8)*S, (H+8)*S);
+    ctx.closePath(); ctx.fill();
+    // 壁缘补笔
+    ctx.strokeStyle = PAL.INK; ctx.globalAlpha = 0.35; ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], xx = (p.x + (isLeft?1.5:-1.5) + jr(520+p.y,2)*0.6)*S;
+      i === 0 ? ctx.moveTo(xx, p.y*S) : ctx.lineTo(xx, p.y*S);
+    }
+    ctx.stroke(); ctx.globalAlpha = 1;
+  };
+  if (Game.walls) { drawWall(Game.walls.L, true); drawWall(Game.walls.R, false); }
+
+  // 深渊渐变 (底部坠落感)
+  const ag = ctx.createLinearGradient(0, (H-55)*S, 0, H*S);
+  ag.addColorStop(0, 'rgba(17,17,17,0)'); ag.addColorStop(1, 'rgba(17,17,17,0.5)');
+  ctx.fillStyle = ag; ctx.fillRect(0, (H-55)*S, W*S, 55*S);
+
+  drawDust(dt);
+
+  // 平台 + 玩家 (沸腾帧)
+  px(40, 50, 28, 3, PAL.INK);
+  sketchLineS(39*S, 50*S, 69*S, 50*S, PAL.INK, 0.5, 1.5, 530);
+  for (let i = 0; i < 5; i++) px(41+i*6, 53, 1, 1.5+jr(531,i)*0.7, PAL.INK, 0.5);
+  drawSprite(boilF%2 ? SPR.player2 : SPR.player1, 54, 45);
+
+  const boil = boilF % 2;
+  const voidActive = TransformFX.anyVoidActive();
+  if (voidActive) { ctx.fillStyle = PAL.INK; ctx.globalAlpha = 0.18;   // 凝实演出时全场压暗
+    ctx.fillRect(0, 0, cv.width, cv.height); ctx.globalAlpha = 1; }
+
+  for (const b of Game.bats) {
+    if (!b.alive) continue;
+    const fy = b.y + Math.sin(now*3 + b.ph)*2;
+    const fx = TransformFX.list.find(f => f.bat === b);
+
+    if (b.type === 'void' && b.voidState) {
+      if (fx && fx.t > 0) {
+        const pr = clamp01(fx.t / fx.dur);
+        for (const c of fx.conv) {
+          const rr = c.r * (1-pr);
+          px(b.x + Math.cos(c.a + pr*2.2)*rr, fy + Math.sin(c.a + pr*2.2)*rr, 1, 1, c.c, 0.4+pr*0.5);
+        }
+        drawSprite(boil ? SPR.voidB : SPR.voidA, b.x, fy, 0.35 + pr*0.5);
+        if (pr > 0.8) drawSprite(boil ? SPR.mothB : SPR.mothA, b.x, fy, (pr-0.8)/0.2);
+        if (pr > 0.72) { ctx.strokeStyle = '#fff'; ctx.globalAlpha = (1-pr)*2.6; ctx.lineWidth = 2.5;
+          ctx.beginPath(); ctx.arc(b.x*S, fy*S, (pr-0.7)*45*S/3.2, 0, 6.29); ctx.stroke(); ctx.globalAlpha = 1; }
+      } else {
+        drawSprite(boil ? SPR.voidB : SPR.voidA, b.x + (boil?1:0), fy, 0.42 + Math.sin(now*5+b.ph)*0.1);
+      }
+    } else if (b.type === 'armor' && fx) {
+      const blink = Math.floor(fx.t*22) % 2 === 0;
+      drawSprite(boil ? SPR.mothB : SPR.mothA, b.x, fy, 1, blink ? '#ffffff' : undefined);
+      for (const f of fx.frags) {
+        ctx.save(); ctx.translate(f.x*S, f.y*S); ctx.rotate(f.rot);
+        ctx.fillStyle = f.c; ctx.globalAlpha = Math.max(0, 1 - fx.t/fx.dur);
+        ctx.fillRect(-f.sz*S/2, -f.sz*S/2, f.sz*S, f.sz*S); ctx.restore(); ctx.globalAlpha = 1;
+      }
+      const pr = fx.t / fx.dur;
+      ctx.strokeStyle = PAL.BLOOD; ctx.globalAlpha = Math.max(0, 0.85-pr); ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(b.x*S, fy*S, pr*15*S, 0, 6.29); ctx.stroke(); ctx.globalAlpha = 1;
+    } else {
+      const spr = b.type === 'armor' ? (boil ? SPR.armorB : SPR.armorA) : (boil ? SPR.mothB : SPR.mothA);
+      drawSprite(spr, b.x + (boil?1:0), fy);
+    }
+    if (!Pause.open) addClick('bat'+b.x, b.x-6, fy-5, 12, 10, () => Game.stomp(b));
+  }
+
+  for (const p of particles) px(p.x, p.y, p.sz, p.sz, p.c, Math.min(1, p.life*2));
+  TransformFX.drawCue();
+
+  if (Game.voidHint > 0)
+    text('虚体无法击中 — 先清掉其余蝙蝠', W/2, 162, 18, PAL.FADE, 'center', Math.min(1, Game.voidHint));
+
+  // 开场关卡字卡
+  if (Game.introT > 0) {
+    const a = Game.introT > 0.8 ? 1 : Game.introT/0.8;
+    ctx.save(); ctx.translate(W/2*S, 92*S); ctx.rotate(-1.5*Math.PI/180);
+    ctx.font = 'bold 50px ' + FONT; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.globalAlpha = a*0.85;
+    ctx.fillStyle = MPAL.PAPER; ctx.fillText('第 '+Game.level+' 关', 2, 2);
+    ctx.fillStyle = PAL.INK; ctx.fillText('第 '+Game.level+' 关', 0, 0);
+    ctx.restore(); ctx.globalAlpha = 1;
+  }
+
+  // 通关横幅: 墨条扫入
+  if (Game.clearBanner > 0) {
+    const lifeT = 1.1 - Game.clearBanner;
+    const inT = easeOutCubic(Math.min(1, lifeT/0.25));
+    const a = Game.clearBanner < 0.25 ? Game.clearBanner/0.25 : 1;
+    roughFillRect(-4, 86, (W+8)*inT, 22, PAL.INK, 0.85*a, 540);
+    if (inT > 0.9) {
+      text('第 ' + Game.level + ' 关 · 通关', W/2, 97, 30, PAL.PAPER, 'center', a, true);
+      drawSprite(SPR.mothA, W/2-34, 97, 0.6*a); drawSprite(SPR.mothA, W/2+34, 97, 0.6*a);
+    }
+  }
+  ctx.restore();
+
+  // ===== HUD =====
+  // 计时器纸签 (右上)
+  const tw = 26;
+  px(W-tw-3, 2, tw+1, 9, '#fbf8f2', 0.75);
+  sketchRect(W-tw-3, 2, tw+1, 9, RunTimer.fullRun ? MPAL.RED : MPAL.PENCIL_L, 0.5, 1.2, 550);
+  text(RunTimer.fmt(RunTimer.time), W-4, 6.8, 17, RunTimer.fullRun ? PAL.BLOOD : PAL.FADE,
+       'right', 1, true, FONT_NUM);
+  if (RunTimer.fullRun) text('速通', W-tw-9, 6.8, 12, PAL.BLOOD, 'center', 0.6+Math.sin(now*3)*0.2);
+  text('LV.' + Game.level, W/2, 7, 17, PAL.FADE, 'center', 0.85, false, FONT_NUM);
+
+  // 暂停按钮 (左上: 沸腾手绘圆 + ❚❚ + hover 墨水填充)
+  const pbx = 4, pby = 3, pbs = 11;
+  const phov = isHover(pbx, pby, pbs, pbs) && !Pause.open && !Trans.active;
+  let pt = hoverT['pause'] || 0; pt += ((phov?1:0)-pt)*Math.min(1, dtG*13); hoverT['pause'] = pt;
+  if (phov && !lastHover['pause']) SFX.play('tick');
+  lastHover['pause'] = phov;
+  const pcx = (pbx+pbs/2)*S, pcy = (pby+pbs/2)*S;
+  if (pt > 0.03) roughBlob(pcx, pcy, (pbs/2)*S*0.92*easeOutCubic(pt), PAL.INK, 0.85*pt, 551);
+  ctx.strokeStyle = phov ? MPAL.RED : PAL.INK; ctx.globalAlpha = phov ? 0.95 : 0.5;
+  ctx.lineWidth = phov ? 2.4 : 1.6;
+  ctx.beginPath();
+  for (let i = 0; i <= 22; i++) { const a = i/22*6.29;
+    const rr = (pbs/2)*S - 2 + jr(552, i)*1.5;
+    const xx = pcx + Math.cos(a)*rr, yy = pcy + Math.sin(a)*rr;
+    i === 0 ? ctx.moveTo(xx, yy) : ctx.lineTo(xx, yy); }
+  ctx.closePath(); ctx.stroke(); ctx.globalAlpha = 1;
+  const ic = pt > 0.45 ? MPAL.PAPER : (phov ? MPAL.RED : PAL.INK);
+  px(pbx+3.4, pby+3.5, 1.4, 4.2, ic, phov ? 1 : 0.7);
+  px(pbx+6.2, pby+3.5, 1.4, 4.2, ic, phov ? 1 : 0.7);
+  if (!Pause.open) addClick('pausebtn', pbx, pby, pbs, pbs, () => Pause.toggle());
+
+  if (Pause.open || Pause.slide > 0.01) drawPauseOverlay();
+
+  if (flash > 0) { ctx.fillStyle = flashColor; ctx.globalAlpha = flash;
+    ctx.fillRect(0, 0, cv.width, cv.height); ctx.globalAlpha = 1; }
+}
+
+function drawPauseOverlay() {
+  const sl = Pause.slide;
+  ctx.fillStyle = PAL.INK; ctx.globalAlpha = 0.55*sl;
+  ctx.fillRect(0, 0, cv.width, cv.height); ctx.globalAlpha = 1;
+  if (!Pause.open) return;
+  addClick('pauseblock', 0, 0, W, H, () => {});
+  if (Pause.settingsOpen) { drawSettingsPanel(false); return; }
+
+  const pw = 78, ph = 100;
+  const pxx = (W-pw)/2, pyy = (H-ph)/2 + (1-easeOutBack(sl))*26;
+  ctx.save();
+  ctx.translate(W/2*S, (pyy+ph/2)*S); ctx.rotate(-0.8*Math.PI/180);
+  ctx.translate(-W/2*S, -(pyy+ph/2)*S);
+  // 投影 + 纸面 + 撕裂上缘
+  ctx.fillStyle = 'rgba(8,6,4,0.45)'; ctx.globalAlpha = sl;
+  ctx.fillRect((pxx+2)*S, (pyy+2.5)*S, pw*S, ph*S);
+  ctx.fillStyle = MPAL.PAPER; ctx.globalAlpha = 0.97*sl;
+  ctx.beginPath();
+  ctx.moveTo(pxx*S, (pyy+2)*S);
+  for (let i = 0; i <= 12; i++)                       // 撕纸边
+    ctx.lineTo((pxx + pw*i/12)*S, (pyy + 1 + jr(560, i)*1.4)*S);
+  ctx.lineTo((pxx+pw)*S, (pyy+ph)*S); ctx.lineTo(pxx*S, (pyy+ph)*S);
+  ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+  sketchRect(pxx, pyy+1, pw, ph-1, MPAL.PENCIL, 0.7*sl, 1.8, 561);
+
+  text('暂 停', W/2, pyy+15, 38, MPAL.PENCIL, 'center', sl, true);
+  sketchLineS((pxx+12)*S, (pyy+24)*S, (pxx+pw-12)*S, (pyy+24.5)*S, MPAL.PENCIL_L, 0.5*sl, 1.3, 562);
+  text('— 计时已暂停 —', W/2, pyy+31, 14, MPAL.PENCIL_L, 'center', 0.7*sl);
+
+  button('p_resume', pxx+9, pyy+38, pw-18, 15, '继续游戏', true, () => Pause.toggle(), 24);
+  button('p_set',    pxx+9, pyy+58, pw-18, 15, '设 置',   false, () => { Pause.settingsOpen = true; SFX.play('page'); }, 24);
+  button('p_menu',   pxx+9, pyy+78, pw-18, 15, '返回主界面', false, () => {
+    RunTimer.stop(); RunTimer.breakFullRun();
+    Trans.go(() => { Pause.close(); state = ST.MENU; });
+  }, 24);
+  ctx.restore();
+}
+// ============================================================
+// MODULE: VictoryScreen → victory.lua
+// 数字滚动结算 + 新纪录印章砸落 + 血滴垂落 + 双层羽毛
+// ============================================================
+const Victory = {
+  t:0, showTime:false, finalTime:0, newRecord:false, feathers:[], drips:[], stamped:false,
+  enter() {
+    this.t = 0; this.stamped = false;
+    this.showTime = RunTimer.fullRun; this.finalTime = RunTimer.time;
+    RunTimer.stop();
+    this.newRecord = this.showTime ? SaveData.submitTime(this.finalTime) : false;
+    this.feathers = [];
+    for (let i = 0; i < 18; i++) this.feathers.push({
+      x:Math.random()*W, y:Math.random()*H - H, vy:3+Math.random()*7,
+      ph:Math.random()*6.28, amp:3+Math.random()*7, r:Math.random()*6.28,
+      depth:Math.random()<0.5?0.4:1 });
+    this.drips = [];
+    for (let i = 0; i < 4; i++) this.drips.push({
+      x:14 + Math.random()*(W-28), len:0, max:14+Math.random()*26, sp:2.5+Math.random()*4 });
+    state = ST.VICTORY;
+    SFX.play('win');
+  },
+  update(dt) {
+    this.t += dt;
+    for (const f of this.feathers) { f.y += f.vy*f.depth*dt; f.ph += dt*2; f.r += dt*0.8;
+      if (f.y > H+10) { f.y = -10; f.x = Math.random()*W; } }
+    for (const d of this.drips) if (d.len < d.max) d.len += d.sp*dt;
+  },
+};
+
+function drawVictory(dt) {
+  Victory.update(dt);
+  const t = Victory.t;
+  drawPaperBg(true);
+  drawDust(dt);
+
+  // 远景羽毛
+  for (const f of Victory.feathers) if (f.depth < 1) drawFeather(f, 0.18);
+  // 顶部血滴垂落
+  for (const d of Victory.drips) {
+    ctx.strokeStyle = PAL.BLOOD; ctx.globalAlpha = 0.4; ctx.lineWidth = 2.2; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(d.x*S, 0); ctx.lineTo(d.x*S, d.len*S); ctx.stroke();
+    roughBlob(d.x*S, d.len*S, 1.6*S, PAL.BLOOD, 0.5, 600+d.x);
+    ctx.globalAlpha = 1;
+  }
+
+  // 恭喜通关 (淡入 + 血线划出)
+  const a1 = Math.min(1, t/0.8);
+  ctx.save();
+  ctx.translate(W/2*S, (H*0.24 + Math.sin(now)*1.5)*S); ctx.rotate(-2*Math.PI/180);
+  ctx.globalAlpha = a1*0.85; ctx.drawImage(inkSplat, -140, -80); ctx.globalAlpha = 1;
+  ctx.font = 'bold 62px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.globalAlpha = a1;
+  ctx.fillStyle = 'rgba(44,44,44,0.18)'; ctx.fillText('恭喜通关', 4, 5);
+  ctx.fillStyle = MPAL.PENCIL_L; ctx.fillText('恭喜通关', 2, 2);
+  ctx.fillStyle = MPAL.PENCIL; ctx.fillText('恭喜通关', 0, 0);
+  ctx.globalAlpha = 1;
+  if (t > 0.5) { const lw2 = easeOutCubic((t-0.5)/0.5);
+    sketchLineS(-40*lw2*S, 14*S, 40*lw2*S, 15*S, PAL.BLOOD, 0.85, 3, 610);
+  }
+  ctx.restore();
+
+  const a2 = clamp01((t-1.0)/0.6);
+  text('—— 三十六层洞穴 · 尽抵深渊 ——', W/2, H*0.385, 16, MPAL.PENCIL_L, 'center', a2*0.8);
+
+  if (Victory.showTime) {
+    const a3 = clamp01((t-1.3)/0.5);
+    text('通关用时', W/2, H*0.475, 21, MPAL.PENCIL, 'center', a3);
+    // 数字滚动结算
+    const cntP = easeOutCubic(clamp01((t-1.5)/1.3));
+    const shown = Victory.finalTime * cntP;
+    text(RunTimer.fmt(shown), W/2, H*0.545, 46, PAL.BLOOD, 'center', a3, true, FONT_NUM);
+    if (cntP >= 1 && Victory.newRecord) {
+      // 新纪录印章砸落
+      const st = clamp01((t-2.9)/0.16);
+      if (st > 0 && !Victory.stamped) { Victory.stamped = true; shake = 7; SFX.play('stamp'); }
+      if (st > 0) {
+        const sc = 1 + (1-easeOutCubic(st))*2.2;
+        ctx.save();
+        ctx.translate((W/2+33)*S, (H*0.50)*S); ctx.rotate(14*Math.PI/180); ctx.scale(sc, sc);
+        ctx.globalAlpha = st;
+        roughBlob(0, 0, 11.5*S, PAL.BLOOD, 0.14, 611);
+        ctx.strokeStyle = MPAL.RED; ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        for (let i = 0; i <= 24; i++) { const a = i/24*6.29;
+          const rr = 11*S*(1+jr(612,i)*0.06);
+          i===0 ? ctx.moveTo(Math.cos(a)*rr, Math.sin(a)*rr) : ctx.lineTo(Math.cos(a)*rr, Math.sin(a)*rr); }
+        ctx.closePath(); ctx.stroke();
+        ctx.font = 'bold 22px ' + FONT; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillStyle = MPAL.RED; ctx.fillText('新纪录', 0, -4); ctx.fillText('NEW', 0, 8);
+        ctx.restore(); ctx.globalAlpha = 1;
+      }
+    } else if (cntP >= 1 && SaveData.data.bestTime !== null && !Victory.newRecord) {
+      text('最佳纪录  ' + RunTimer.fmt(SaveData.data.bestTime), W/2, H*0.615, 15,
+           MPAL.PENCIL_L, 'center', 0.85, false, FONT_NUM);
+    }
+  } else {
+    const a3 = clamp01((t-1.3)/0.5);
+    text('从第 1 关一口气通关', W/2, H*0.50, 16, MPAL.PENCIL_L, 'center', a3*0.75);
+    text('即可记录速通时间', W/2, H*0.55, 16, MPAL.PENCIL_L, 'center', a3*0.75);
+  }
+
+  // 近景羽毛
+  for (const f of Victory.feathers) if (f.depth >= 1) drawFeather(f, 0.4);
+
+  if (t > 2.0) button('v_menu', W/2-36, H*0.78, 72, 17, '返回主菜单', true,
+    () => Trans.go(() => { state = ST.MENU; }), 26);
+}
+function drawFeather(f, alpha) {
+  const fx2 = f.x + Math.sin(f.ph)*f.amp;
+  ctx.save(); ctx.translate(fx2*S, f.y*S); ctx.rotate(Math.sin(f.r)*0.8);
+  ctx.fillStyle = PAL.INK; ctx.globalAlpha = alpha;
+  ctx.fillRect(-1.3*S, -0.5*S, 2.6*S, S);
+  ctx.fillRect(-0.4*S, -1*S, 0.8*S, 2*S);
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// 输入
+// ============================================================
+cv.addEventListener('mousemove', e => {
+  const r = cv.getBoundingClientRect();
+  mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top;
+  mouse.gx = mouse.x/S; mouse.gy = mouse.y/S;
+  if (dragVol) {
+    SaveData.data.volume = Math.round(clamp01((mouse.gx-20)/60)*20)*5; SaveData.save();
+  }
+});
+cv.addEventListener('mousedown', () => {
+  SFX.ensure();
+  if (Trans.active) return;
+  mouse.down = true;
+  for (let i = clickables.length-1; i >= 0; i--) { const c = clickables[i];
+    if (mouse.gx >= c.x && mouse.gx <= c.x+c.w && mouse.gy >= c.y && mouse.gy <= c.y+c.h) { c.cb(); return; } }
+});
+window.addEventListener('mouseup', () => { mouse.down = false; dragVol = false; });
+window.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft'  && state === ST.LEVEL_SELECT) { LevelSelect.flip(-1); return; }
+  if (e.key === 'ArrowRight' && state === ST.LEVEL_SELECT) { LevelSelect.flip(1);  return; }
+  if (e.key !== 'Escape') return;
+  e.preventDefault();
+  if (Trans.active) return;
+  if (state === ST.PLAYING) {
+    if (Menu.resetConfirm) Menu.resetConfirm = false;
+    else if (Pause.settingsOpen) Pause.settingsOpen = false;
+    else Pause.toggle();
+  }
+  else if (state === ST.LEVEL_SELECT) Trans.go(() => { state = ST.MENU; });
+  else if (state === ST.VICTORY) Trans.go(() => { state = ST.MENU; });
+  else if (state === ST.MENU) {
+    if (Menu.resetConfirm) Menu.resetConfirm = false;
+    else if (Menu.settingsOpen) Menu.settingsOpen = false;
+  }
+});
+
+// ============================================================
+// 调试入口
+// ============================================================
+const DBG = {
+  clearLevel() { if (state !== ST.PLAYING) return;
+    Game.bats.forEach(b => b.alive = false); TransformFX.list.length = 0;
+    if (!Game.levelDone) Game.win(); },
+  unlockAll() { SaveData.data.furthest = TOTAL_LEVELS; SaveData.save(); },
+  resetSave() { SaveData.resetProgress(); },
+  gotoVictory(full) { RunTimer.fullRun = full; RunTimer.time = full ? (8*60+42.3) : 0;
+    RunTimer.running = true; Victory.enter(); },
+};
+
+// ============================================================
+// 主循环
+// ============================================================
+SaveData.load();
+let last = performance.now();
+function frame(ts) {
+  let dt = Math.min(0.05, (ts-last)/1000); last = ts;
+  now += dt; dtG = dt;
+  boilF = Math.floor(now*8) % 1000;
+
+  let worldDt = dt;
+  if (hitstop > 0) { hitstop -= dt; worldDt = 0; }
+  if (shake > 0) shake = Math.max(0, shake - dt*30);
+  if (flash > 0) flash = Math.max(0, flash - dt*1.5);
+
+  clickables.length = 0;
+  Pause.update(dt);
+  Trans.update(dt);
+
+  if (state === ST.PLAYING) {
+    RunTimer.update(dt);
+    if (!Pause.open) { TransformFX.update(worldDt); updateParticles(worldDt); Game.update(worldDt); }
+    drawPlaying(dt);
+  }
+  else if (state === ST.MENU)         drawMenu(dt);
+  else if (state === ST.LEVEL_SELECT) drawLevelSelect(dt);
+  else if (state === ST.VICTORY)      drawVictory(dt);
+
+  Trans.draw();
+
+  cv.style.cursor = (!Trans.active && clickables.some(c =>
+    c.id !== 'pauseblock' && c.id !== 'dlgblock' &&
+    mouse.gx>=c.x && mouse.gx<=c.x+c.w && mouse.gy>=c.y && mouse.gy<=c.y+c.h)) ? 'pointer' : 'default';
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
